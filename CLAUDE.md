@@ -25,3 +25,11 @@
 - **Error Handling**: Use explicit exception types; add context with `raise ... from`
 - **Documentation**: Docstrings for all public functions/classes (Google style)
 - **Testing**: Pytest with descriptive test names
+- **Commit Messages**: Use conventional commit prefixes:
+  - `feat:` New features
+  - `fix:` Bug fixes
+  - `docs:` Documentation changes
+  - `style:` Formatting changes (whitespace, etc)
+  - `refactor:` Code changes that neither add features nor fix bugs
+  - `test:` Adding or refactoring tests
+  - `chore:` Maintenance tasks, dependency updates, etc.

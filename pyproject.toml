@@ -1,7 +1,15 @@
 [project]
 name = "infobot-reborn"
 version = "0.1.0"
-description = "Add your description here"
+description = "An LLM-powered conversational AI chatbot, a spiritual successor to the original Infobot project"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = []
+
+[dependency-groups]
+dev = [
+    "black>=25.1.0",
+    "mypy>=1.15.0",
+    "pytest>=8.3.5",
+    "ruff>=0.9.9",
+]
