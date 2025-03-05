@@ -1,9 +1,11 @@
 # CLAUDE.md: Guide for Infobot Reborn
 
 ## Build & Run Commands
-- Install dependencies: `uv pip install -r requirements.txt`
 - Create/update virtualenv: `uv venv`
-- Install dev dependencies: `uv pip install -e ".[dev]"`
+- Install dependencies: `uv sync`
+- Install with dev dependencies: `uv sync --group dev`
+- Add new dependency: `uv add <package-name>`
+- Add new dev dependency: `uv add --group dev <package-name>`
 - Run locally: `python src/main.py`
 - Run on Modal: `modal serve src/modal.py`
 - Deploy to Modal: `modal deploy src/modal.py`

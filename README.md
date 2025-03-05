@@ -20,7 +20,7 @@ This project builds on the legacy of the original Infobot, a Perl-based IRC bot 
 
 ### Prerequisites
 
-- Python 3.10+
+- Python 3.11+
 - [uv](https://github.com/astral-sh/uv) for dependency management
 - [Modal](https://modal.com/) account (for deployment)
 
@@ -35,8 +35,11 @@ cd infobot-reborn
 uv venv
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 
-# Install dependencies
-uv pip install -r requirements.txt
+# Install dependencies from pyproject.toml
+uv sync
+
+# For development, include dev dependencies
+# uv sync --group dev
 ```
 
 ### Running Locally
