@@ -14,19 +14,47 @@
 - Type check: `mypy src/ tests/`
 - Run all tests: `pytest tests/`
 - Run single test: `pytest tests/test_file.py::test_function -v`
+- Run with test coverage: `pytest --cov=src tests/`
+- Generate coverage report: `pytest --cov=src --cov-report=html tests/`
+- Scan dependencies for security vulnerabilities: `safety check`
 
 ## Code Style Guidelines
 - **Architecture**: Modal-specific code only in modal.py; core logic should be hosting-agnostic
 - **Formatting**: Black with 88 character line length
 - **Imports**: Grouped by standard library, third-party, local; alphabetized within groups
 - **Type Hints**: Use throughout; prefer explicit over implicit types
+- **Modern Python Features**:
+  - Use data classes (`@dataclass`) for data containers
+  - Always use f-strings for string formatting
+  - Leverage pattern matching (`match/case`) where appropriate
+  - Use the walrus operator (`:=`) for assignment expressions
+  - Prefer typed dictionaries and `TypedDict` over raw dicts
+  - Use structural pattern matching for complex conditionals
+- **Asynchronous Code**:
+  - Use `asyncio` for asynchronous operations
+  - Prefer `async/await` syntax over callbacks
+  - Mark I/O-bound functions as `async`
+  - Use `asyncio.gather` for parallel execution
+  - Add proper exception handling in async code
+- **Security**:
+  - Scan dependencies regularly with `safety check`
+  - Use semver ranges for dependencies (e.g., >=1.2.3,<2.0.0) to allow security patches
+  - Review security advisories for dependencies
+  - Use environment variables for sensitive values (never hardcode)
+  - Validate all user inputs before processing
+  - Follow OWASP guidelines for web applications
+- **Testing**:
+  - Write pytest tests with descriptive names
+  - Aim for high test coverage (>80%)
+  - Use fixtures and parametrization 
+  - Test both success and error cases
+  - Mock external dependencies
 - **Naming**: 
   - Functions/variables: snake_case
   - Classes: PascalCase
   - Constants: UPPER_SNAKE_CASE
 - **Error Handling**: Use explicit exception types; add context with `raise ... from`
 - **Documentation**: Docstrings for all public functions/classes (Google style)
-- **Testing**: Pytest with descriptive test names
 - **Commit Messages**: Use conventional commit prefixes:
   - `feat:` New features
   - `fix:` Bug fixes

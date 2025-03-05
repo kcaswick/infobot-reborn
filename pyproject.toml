@@ -11,5 +11,7 @@ dev = [
     "black>=25.1.0",
     "mypy>=1.15.0",
     "pytest>=8.3.5",
+    "pytest-cov>=6.0.0",
     "ruff>=0.9.9",
+    "safety>=3.3.1",
 ]
