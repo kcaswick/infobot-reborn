@@ -20,6 +20,8 @@ Infobot Reborn is an LLM-powered conversational AI chatbot, designed as a spirit
 - Abstraction over LLM providers
 - Handles prompt engineering and response formatting
 - Manages token usage and rate limiting
+- Default implementation uses locally-run open-source LLMs
+- Supports customization via prompt engineering and fine-tuning
 
 ### Knowledge Base
 - Stores and retrieves factual information
@@ -49,8 +51,30 @@ Infobot Reborn is an LLM-powered conversational AI chatbot, designed as a spirit
 5. Response sent back to user
 6. Conversation state updated
 
+## LLM Strategy
+
+### Default Approach
+- Use locally-hosted open-source LLMs (e.g., NousResearch/DeepHermes-3-Llama-3-8B-Preview-GGUF or meta-llama/Llama-3.1-8B-Instruct)
+- Quantized models (Q4) for efficient deployment
+- Custom prompt templates to match infobot's conversational style
+- All components designed to be LLM-agnostic
+
+### Fine-tuning Pipeline
+- Initial alignment via prompt engineering
+- Reinforcement Learning (RL) with LoRA for deeper behavioral alignment
+- Training data sourced from:
+  - Historical infobot conversation logs
+  - Synthetic training examples
+- All training data published under CC-BY license
+- Open-source training scripts for customization
+
+### Model Customization
+- End users can substitute preferred base models
+- Documentation for adapting the system to different LLMs
+- Evaluation framework to assess behavioral alignment
+
 ## Future Extensions
 - Multi-modal input/output (images, audio)
-- Fine-tuning capabilities
 - Advanced retrieval augmented generation (RAG)
 - User authentication and personalization
+- Additional fine-tuning techniques beyond RL-LoRA
