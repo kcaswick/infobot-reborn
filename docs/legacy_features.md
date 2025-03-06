@@ -3,10 +3,12 @@
 ## Overview
 This document catalogs the core features and behaviors of the original Infobot based on examination of legacy files. The information here is derived from the following sources:
 
-- `/Egor-try1/doc/infobot_guide.html` - Official guide for Infobot version 0.44.3
-- `/Egor-try1/doc/intro.bit` - Brief introduction to Infobot features
-- `/Egor-try1/Egor.log` - Log of Infobot interactions (Egor instance)
-- `/Egor-try1/Egor-is.txt` and `/Egor-try1/Egor-are.txt` - Factoid databases
+- `Egor-try1/doc/infobot_guide.html` - Official guide for Infobot version 0.44.3
+- `Egor-try1/doc/intro.bit` - Brief introduction to Infobot features
+- `Egor-try1/src/Setup.pl` - Perl script that both reads config and initializes a bunch of variables with hardcoded phrases
+- `Egor-try1/src/Statement.pl` - Perl script containing much of the core speech patterns and many of the regexes for matching input.
+- `Egor-try1/Egor.log` - Log of Infobot interactions (Egor instance)
+- `Egor-try1/Egor-is.txt` and `Egor-try1/Egor-are.txt` - Factoid databases
 
 ## Core Knowledge Base Features
 
