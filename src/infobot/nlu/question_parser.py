@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable, Optional
-
 
 from infobot.nlu.intents import FactoidQueryIntent
-
 
 _WHITESPACE_RE = re.compile(r"\s+")
 
@@ -17,7 +15,7 @@ _WHITESPACE_RE = re.compile(r"\s+")
 class _PatternRule:
     name: str
     pattern: re.Pattern[str]
-    question_word_group: Optional[str]
+    question_word_group: str | None
 
 
 _QUESTION_RULES: tuple[_PatternRule, ...] = (
@@ -45,7 +43,7 @@ _QUESTION_RULES: tuple[_PatternRule, ...] = (
 )
 
 
-def parse_question(message: str) -> Optional[FactoidQueryIntent]:
+def parse_question(message: str) -> FactoidQueryIntent | None:
     """Parse a message into a question intent.
 
     Args:
@@ -88,8 +86,8 @@ def _normalize_text(value: str) -> str:
 
 def _extract_question_word(
     match: re.Match[str],
-    group: Optional[str],
-) -> Optional[str]:
+    group: str | None,
+) -> str | None:
     if group is None:
         return None
 

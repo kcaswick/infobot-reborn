@@ -3,31 +3,10 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
-from enum import Enum
-from typing import Optional
 
+from infobot.nlu.intents import FactoidCreateIntent, ModificationType
 
 _WHITESPACE_RE = re.compile(r"\s+")
-
-
-class ModificationType(Enum):
-    """How a factoid should be modified."""
-
-    SET = "set"
-    REPLACE = "replace"
-    APPEND = "append"
-
-
-@dataclass(frozen=True)
-class FactoidCreateIntent:
-    """Structured intent for creating or modifying a factoid."""
-
-    text: str
-    key: str
-    value: str
-    is_plural: bool
-    modification_type: ModificationType
 
 
 _REPLACE_RE = re.compile(
@@ -84,7 +63,7 @@ _QUESTION_STARTERS = (
 )
 
 
-def detect_factoid_create_intent(message: str) -> Optional[FactoidCreateIntent]:
+def detect_factoid_create_intent(message: str) -> FactoidCreateIntent | None:
     """Detect factoid creation/modification intents.
 
     Args:
