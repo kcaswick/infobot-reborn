@@ -37,6 +37,19 @@ All configuration is via environment variables. Copy `.env.example` to `.env` fo
 | `DATABASE_PATH` | No | `data/infobot.db` | Path to SQLite database file |
 | `LOG_LEVEL` | No | `INFO` | Logging level |
 
+## Module Structure
+```
+src/infobot/              # Main package (importable as `infobot`)
+  __init__.py             # Package root, __version__
+  config.py               # Settings loaded from env vars
+  db/                     # SQLite database layer (aiosqlite)
+  kb/                     # Knowledge base — factoid CRUD
+  nlu/                    # Question parser + intent detector
+  formatter/              # Response formatting (<reply>, variables, etc.)
+src/main.py               # CLI entry point
+tests/                    # pytest test suite
+```
+
 ## Code Style Guidelines
 - **Architecture**: Modal-specific code only in modal.py; core logic should be hosting-agnostic
 - **Formatting**: Black with 88 character line length
