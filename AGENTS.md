@@ -1,4 +1,4 @@
-# CLAUDE.md: Guide for Infobot Reborn
+# AGENTS.md: Guide for Infobot Reborn
 
 ## Build & Run Commands
 - Create/update virtualenv: `uv venv`
@@ -17,6 +17,25 @@
 - Run with test coverage: `pytest --cov=src tests/`
 - Generate coverage report: `pytest --cov=src --cov-report=html tests/`
 - Scan dependencies for security vulnerabilities: `safety check`
+
+## Local Development Prerequisites
+- **Python 3.11+** (managed via `.python-version`)
+- **uv** for dependency management
+- **ollama** for local LLM inference (provides OpenAI-compatible endpoint)
+  - Install: https://ollama.com
+  - Pull a small model for dev: `ollama pull qwen3:1.7b`
+  - The bot connects to ollama at `http://localhost:11434/v1` by default
+
+## Environment Variables
+All configuration is via environment variables. Copy `.env.example` to `.env` for local dev.
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `DISCORD_BOT_TOKEN` | Yes (for Discord) | — | Discord bot token from Developer Portal |
+| `LLM_BASE_URL` | No | `http://localhost:11434/v1` | OpenAI-compatible API base URL |
+| `LLM_MODEL` | No | `qwen3:1.7b` | Model name to request from the LLM server |
+| `DATABASE_PATH` | No | `data/infobot.db` | Path to SQLite database file |
+| `LOG_LEVEL` | No | `INFO` | Logging level |
 
 ## Code Style Guidelines
 - **Architecture**: Modal-specific code only in modal.py; core logic should be hosting-agnostic
@@ -55,14 +74,23 @@
   - Constants: UPPER_SNAKE_CASE
 - **Error Handling**: Use explicit exception types; add context with `raise ... from`
 - **Documentation**: Docstrings for all public functions/classes (Google style)
-- **Commit Messages**: Use conventional commit prefixes:
-  - `feat:` New features
-  - `fix:` Bug fixes
-  - `docs:` Documentation changes
-  - `style:` Formatting changes (whitespace, etc)
-  - `refactor:` Code changes that neither add features nor fix bugs
-  - `test:` Adding or refactoring tests
-  - `chore:` Maintenance tasks, dependency updates, etc.
+- **Commit Messages**:
+  - Format: `<type>(<scope>): <subject>` — subject line max 72 chars
+  - Types: `feat`, `fix`, `docs`, `style`, `refactor`, `test`, `chore`
+  - Scopes: use the module or area being changed (e.g., `kb`, `nlu`, `discord`, `db`, `config`, `modal`)
+  - Bead reference: append bead ID on its own line at the end (e.g., `bd-6lc`)
+  - Body (optional): explain **why**, not what. Do not restate the diff in English. Keep it to 1-3 sentences if included.
+  - Example:
+    ```
+    feat(kb): add factoid data model
+
+    Factoids are the core knowledge unit inherited from the original
+    Infobot — needed before any retrieval or NLU work can begin.
+
+    bd-6lc
+    ```
+- **Commit Granularity**: Commit in reasonable-sized pieces. Each commit should be one logical change — not a giant monolithic dump of an entire feature. For example, "add factoid data model" and "add factoid CRUD operations" are separate commits, not one. This makes review, bisection, and rollback practical.
+- **Parallel Work**: When multiple beads are unblocked and can be worked on simultaneously, use `ntm` to spawn agents and assign beads to them. Single-bead work doesn't require ntm.
 
 <!-- br-agent-instructions-v1 -->
 
