@@ -7,7 +7,13 @@ import os
 from dataclasses import dataclass
 from typing import Optional, TypedDict
 
-from openai import APIConnectionError, APIError, APITimeoutError, AsyncOpenAI, RateLimitError
+from openai import (
+    APIConnectionError,
+    APIError,
+    APITimeoutError,
+    AsyncOpenAI,
+    RateLimitError,
+)
 
 from infobot.config import Config
 

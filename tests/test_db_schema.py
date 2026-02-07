@@ -6,7 +6,9 @@ from infobot.db.connection import DatabaseConnection
 from infobot.db.schema import SCHEMA_VERSION, initialize_schema, reset_schema
 
 
-async def test_initialize_schema_creates_tables(db_conn_uninitialized: DatabaseConnection):
+async def test_initialize_schema_creates_tables(
+    db_conn_uninitialized: DatabaseConnection,
+):
     """Test that initialize_schema creates required tables."""
     await initialize_schema(db_conn_uninitialized)
 
@@ -27,7 +29,9 @@ async def test_initialize_schema_creates_tables(db_conn_uninitialized: DatabaseC
     assert row[0] == "factoids"
 
 
-async def test_initialize_schema_sets_version(db_conn_uninitialized: DatabaseConnection):
+async def test_initialize_schema_sets_version(
+    db_conn_uninitialized: DatabaseConnection,
+):
     """Test that initialize_schema sets the correct schema version."""
     await initialize_schema(db_conn_uninitialized)
 
@@ -143,7 +147,9 @@ async def test_factoids_index_created(db_conn_uninitialized: DatabaseConnection)
     assert row[0] == "idx_factoids_key"
 
 
-async def test_reset_schema_drops_and_recreates(db_conn_uninitialized: DatabaseConnection):
+async def test_reset_schema_drops_and_recreates(
+    db_conn_uninitialized: DatabaseConnection,
+):
     """Test that reset_schema drops existing data and recreates schema."""
     await initialize_schema(db_conn_uninitialized)
 

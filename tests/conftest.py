@@ -10,6 +10,7 @@ from infobot.db.schema import initialize_schema
 from infobot.kb.store import FactoidStore
 from infobot.services.llm_service import LlmService
 
+
 @pytest.fixture
 async def db_conn(tmp_path: Path) -> DatabaseConnection:
     """Provide a connected database with schema initialized.

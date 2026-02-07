@@ -72,7 +72,9 @@ async def test_execute_with_parameters(db_conn_uninitialized: DatabaseConnection
     await db_conn_uninitialized.commit()
 
     # Query back
-    cursor = await db_conn_uninitialized.execute("SELECT value FROM test_table WHERE id = ?", (1,))
+    cursor = await db_conn_uninitialized.execute(
+        "SELECT value FROM test_table WHERE id = ?", (1,)
+    )
     row = await cursor.fetchone()
     assert row[0] == "test"
 
@@ -121,7 +123,9 @@ async def test_commit_and_rollback(db_conn_uninitialized: DatabaseConnection):
     row = await cursor.fetchone()
     assert row[0] == 1
 
-    cursor = await db_conn_uninitialized.execute("SELECT value FROM test_table WHERE id = 1")
+    cursor = await db_conn_uninitialized.execute(
+        "SELECT value FROM test_table WHERE id = 1"
+    )
     row = await cursor.fetchone()
     assert row[0] == "committed"
 
