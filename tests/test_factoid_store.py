@@ -1,29 +1,9 @@
 """Tests for factoid storage."""
 
-from pathlib import Path
-
 import pytest
 
-from infobot.db.connection import DatabaseConnection
-from infobot.db.schema import initialize_schema
 from infobot.kb.factoid import Factoid, FactoidType
 from infobot.kb.store import FactoidStore
-
-
-@pytest.fixture
-async def db_conn(tmp_path: Path) -> DatabaseConnection:
-    """Provide a connected database with schema initialized."""
-    conn = DatabaseConnection(tmp_path / "test.db")
-    await conn.connect()
-    await initialize_schema(conn)
-    yield conn
-    await conn.close()
-
-
-@pytest.fixture
-async def store(db_conn: DatabaseConnection) -> FactoidStore:
-    """Provide a factoid store."""
-    return FactoidStore(db_conn)
 
 
 async def test_create_factoid(store: FactoidStore):

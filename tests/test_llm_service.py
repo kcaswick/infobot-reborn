@@ -1,34 +1,21 @@
+"""Tests for LLM service abstraction."""
+
 from types import SimpleNamespace
 
 import pytest
 
-from infobot.services.llm_service import LlmRequest, LlmService, LlmServiceError
-
-
-class _FakeChatCompletions:
-    def __init__(self, responses: list[object]) -> None:
-        self._responses = responses
-        self.calls = 0
-
-    async def create(self, **_kwargs: object) -> SimpleNamespace:
-        response = self._responses[self.calls]
-        self.calls += 1
-        if isinstance(response, Exception):
-            raise response
-        return response
-
-
-class _FakeClient:
-    def __init__(self, responses: list[object]) -> None:
-        self.chat = SimpleNamespace(completions=_FakeChatCompletions(responses))
+from infobot.services.llm_service import LlmRequest, LlmServiceError
 
 
 @pytest.mark.asyncio
-async def test_llm_service_returns_content() -> None:
+async def test_llm_service_returns_content(mock_llm_client) -> None:
+    """Test that LLM service returns content from successful response."""
+    from infobot.services.llm_service import LlmService
+
     service = LlmService(
         model="test-model",
         base_url="http://localhost",
-        client=_FakeClient(
+        client=mock_llm_client(
             [
                 SimpleNamespace(
                     choices=[SimpleNamespace(message=SimpleNamespace(content="hello"))]
@@ -45,11 +32,14 @@ async def test_llm_service_returns_content() -> None:
 
 
 @pytest.mark.asyncio
-async def test_llm_service_raises_on_empty_content() -> None:
+async def test_llm_service_raises_on_empty_content(mock_llm_client) -> None:
+    """Test that LLM service raises error when response content is empty."""
+    from infobot.services.llm_service import LlmService
+
     service = LlmService(
         model="test-model",
         base_url="http://localhost",
-        client=_FakeClient(
+        client=mock_llm_client(
             [
                 SimpleNamespace(
                     choices=[SimpleNamespace(message=SimpleNamespace(content=None))]
@@ -63,11 +53,14 @@ async def test_llm_service_raises_on_empty_content() -> None:
 
 
 @pytest.mark.asyncio
-async def test_llm_service_retries_on_timeout() -> None:
+async def test_llm_service_retries_on_timeout(mock_llm_client) -> None:
+    """Test that LLM service retries on timeout errors."""
+    from infobot.services.llm_service import LlmService
+
     service = LlmService(
         model="test-model",
         base_url="http://localhost",
-        client=_FakeClient(
+        client=mock_llm_client(
             [
                 TimeoutError("timeout"),
                 SimpleNamespace(
