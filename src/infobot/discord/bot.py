@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+import re
 
 import discord
 from discord.ext import commands
@@ -12,9 +12,6 @@ from infobot.config import Config
 from infobot.db import DatabaseConnection, initialize_schema
 from infobot.message_handler import MessageHandler
 from infobot.services.llm_service import LlmService
-
-if TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +35,10 @@ class InfobotBot(commands.Bot):
         intents.direct_messages = True  # Enable DMs
         intents.guild_messages = True  # Enable server messages
 
-        super().__init__(command_prefix="!", intents=intents)
+        super().__init__(
+            command_prefix=commands.when_mentioned_or("!"),
+            intents=intents,
+        )
 
         self.config = config
         self.db: DatabaseConnection | None = None
@@ -66,6 +66,10 @@ class InfobotBot(commands.Bot):
                 raise RuntimeError("Database not initialized")
             self.message_handler = MessageHandler(self.db, self.llm_service)
             logger.info("Message handler initialized")
+
+            # Sync slash commands
+            synced = await self.tree.sync()
+            logger.info("Synced %s slash command(s)", len(synced))
 
         except Exception as e:
             logger.error(f"Failed to initialize bot services: {e}")
@@ -99,18 +103,29 @@ class InfobotBot(commands.Bot):
         if not message.content or not message.content.strip():
             return
 
+        ctx = await self.get_context(message)
+        if ctx.command is not None:
+            await self.process_commands(message)
+            return
+
+        if not self._should_respond(message):
+            return
+
         # Log message context
-        context_info = (
-            f"DM from {message.author}"
-            if isinstance(message.channel, discord.DMChannel)
-            else f"#{message.channel.name} in {message.guild.name}"
-        )
+        if message.guild is None:
+            context_info = f"DM from {message.author}"
+        else:
+            context_info = f"#{message.channel.name} in {message.guild.name}"
         logger.debug(
             f"Message from {message.author} ({context_info}): {message.content}"
         )
 
         try:
-            response = await self._process_message(message)
+            content = self._clean_message_content(message)
+            response = await self._process_message(
+                content,
+                username=self._get_display_name(message.author),
+            )
             if response:
                 await self._send_response(message, response)
         except Exception as e:
@@ -119,9 +134,6 @@ class InfobotBot(commands.Bot):
                 exc_info=True,
             )
             await self._send_error_response(message)
-
-        # Still process commands if any
-        await self.process_commands(message)
 
     @commands.hybrid_command(name="ask")
     async def ask_command(self, ctx: commands.Context, *, question: str) -> None:
@@ -174,11 +186,12 @@ class InfobotBot(commands.Bot):
             )
             await ctx.send("Sorry, something went wrong while saving that factoid.")
 
-    async def _process_message(self, message: discord.Message) -> str | None:
+    async def _process_message(self, content: str, username: str) -> str | None:
         """Process a regular message through the message handler.
 
         Args:
-            message: The Discord message to process.
+            content: Message content to process.
+            username: Username of the message author.
 
         Returns:
             Response string, or None if no response.
@@ -188,7 +201,8 @@ class InfobotBot(commands.Bot):
             return None
 
         response = await self.message_handler.handle_message(
-            message.content, username=str(message.author)
+            content,
+            username=username,
         )
         return response
 
@@ -209,7 +223,7 @@ class InfobotBot(commands.Bot):
             return None
 
         response = await self.message_handler.handle_message(
-            text, username=str(ctx.author)
+            text, username=self._get_display_name(ctx.author)
         )
         return response
 
@@ -226,9 +240,9 @@ class InfobotBot(commands.Bot):
         if len(response) > 2000:
             chunks = [response[i : i + 2000] for i in range(0, len(response), 2000)]
             for chunk in chunks:
-                await message.reply(chunk)
+                await message.reply(chunk, mention_author=False)
         else:
-            await message.reply(response)
+            await message.reply(response, mention_author=False)
 
         logger.debug(f"Response sent to {message.author}")
 
@@ -242,7 +256,7 @@ class InfobotBot(commands.Bot):
             "Sorry, something went wrong processing your message. Please try again."
         )
         try:
-            await message.reply(error_msg)
+            await message.reply(error_msg, mention_author=False)
         except discord.DiscordException as e:
             logger.error(f"Failed to send error response: {e}")
 
@@ -252,3 +266,38 @@ class InfobotBot(commands.Bot):
         Uses the Discord token from config.
         """
         await self.start(self.config.discord_bot_token)
+
+    def _should_respond(self, message: discord.Message) -> bool:
+        """Determine if the bot should respond to a message.
+
+        Responds to DMs or messages that explicitly mention the bot.
+        """
+        if message.guild is None:
+            return True
+
+        if self.user is None:
+            return False
+
+        return self.user in message.mentions
+
+    def _clean_message_content(self, message: discord.Message) -> str:
+        """Remove bot mentions and trim whitespace from a message.
+
+        Args:
+            message: Discord message.
+
+        Returns:
+            Cleaned message content.
+        """
+        content = message.content
+        if self.user is None or message.guild is None:
+            return content.strip()
+
+        mention_pattern = re.compile(rf"<@!?{self.user.id}>")
+        cleaned = mention_pattern.sub("", content).strip()
+        return cleaned.lstrip(" ,:;")
+
+    @staticmethod
+    def _get_display_name(author: discord.abc.User) -> str:
+        """Return the best display name for a Discord user."""
+        return getattr(author, "display_name", str(author))
