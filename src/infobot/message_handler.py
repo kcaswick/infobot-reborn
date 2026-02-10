@@ -133,7 +133,8 @@ class MessageHandler:
                     f"Appended to factoid '{intent.key}' by {username}: {intent.value}"
                 )
                 response = (
-                    f"OK, I'll remember that {intent.key} is also {intent.value}."
+                    f"OK, I'll remember that {intent.key} {factoid_type.value} also "
+                    f"{intent.value}."
                 )
                 return self._format_response(response, username)
 
