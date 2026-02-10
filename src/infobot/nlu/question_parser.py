@@ -22,7 +22,7 @@ _QUESTION_RULES: tuple[_PatternRule, ...] = (
     _PatternRule(
         name="wh_is",
         pattern=re.compile(
-            r"^\s*(?P<qword>what|where|who)(?:\s+is)?\s+(?P<key>.+?)\s*\??\s*$",
+            r"^\s*(?P<qword>what|where|who)(?:\s+(?:is|are|was|were))?\s+(?P<key>.+?)\s*\??\s*$",
             re.IGNORECASE,
         ),
         question_word_group="qword",

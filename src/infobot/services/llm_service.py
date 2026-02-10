@@ -63,7 +63,7 @@ class LlmService:
         self._retry_backoff_seconds = retry_backoff_seconds
         self._client = client or AsyncOpenAI(
             base_url=base_url,
-            api_key=api_key or os.getenv("OPENAI_API_KEY", "ollama"),
+            api_key=api_key or os.getenv("OPENAI_API_KEY", "not-needed"),
             timeout=timeout_seconds,
         )
 

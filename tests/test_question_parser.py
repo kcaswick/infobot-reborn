@@ -74,3 +74,36 @@ def test_parse_question_non_question() -> None:
 
 def test_parse_question_blank() -> None:
     assert parse_question("   ") is None
+
+
+def test_parse_question_wh_are() -> None:
+    intent = parse_question("What are dogs?")
+
+    assert intent == FactoidQueryIntent(
+        text="What are dogs?",
+        key="dogs",
+        question_word="what",
+        pattern="wh_is",
+    )
+
+
+def test_parse_question_wh_was() -> None:
+    intent = parse_question("What was the Cold War?")
+
+    assert intent == FactoidQueryIntent(
+        text="What was the Cold War?",
+        key="the Cold War",
+        question_word="what",
+        pattern="wh_is",
+    )
+
+
+def test_parse_question_wh_were() -> None:
+    intent = parse_question("Where were the pyramids built?")
+
+    assert intent == FactoidQueryIntent(
+        text="Where were the pyramids built?",
+        key="the pyramids built",
+        question_word="where",
+        pattern="wh_is",
+    )

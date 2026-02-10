@@ -12,6 +12,12 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+class FactoidExistsError(ValueError):
+    """Raised when attempting to create a factoid that already exists."""
+
+    pass
+
+
 class FactoidStore:
     """Manages factoid CRUD operations.
 
@@ -40,12 +46,12 @@ class FactoidStore:
             Created factoid with timestamps set.
 
         Raises:
-            ValueError: If factoid with same key and type already exists.
+            FactoidExistsError: If factoid with same key and type already exists.
         """
         # Check if factoid already exists
         existing = await self.get(factoid.key, factoid.factoid_type)
         if existing is not None:
-            raise ValueError(
+            raise FactoidExistsError(
                 f"Factoid '{factoid.key}' ({factoid.factoid_type.value}) "
                 "already exists"
             )

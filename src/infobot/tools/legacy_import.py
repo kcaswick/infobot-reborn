@@ -16,7 +16,7 @@ from pathlib import Path
 from infobot.db.connection import DatabaseConnection
 from infobot.db.schema import initialize_schema
 from infobot.kb.factoid import Factoid, FactoidType
-from infobot.kb.store import FactoidStore
+from infobot.kb.store import FactoidExistsError, FactoidStore
 
 logger = logging.getLogger(__name__)
 
@@ -221,15 +221,14 @@ async def import_factoid_file(
                     if stats.imported % 100 == 0:
                         logger.info(f"Imported {stats.imported} factoids so far...")
 
+                except FactoidExistsError:
+                    stats.duplicates += 1
+                    logger.debug(f"Duplicate factoid: {key}")
                 except ValueError as e:
-                    if "already exists" in str(e):
-                        stats.duplicates += 1
-                        logger.debug(f"Duplicate factoid: {key}")
-                    else:
-                        stats.errors += 1
-                        logger.warning(
-                            f"Error creating factoid at {file_path}:{line_num}: {e}"
-                        )
+                    stats.errors += 1
+                    logger.warning(
+                        f"Error creating factoid at {file_path}:{line_num}: {e}"
+                    )
                 except Exception as e:
                     stats.errors += 1
                     logger.error(f"Unexpected error at {file_path}:{line_num}: {e}")

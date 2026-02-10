@@ -1,5 +1,6 @@
 """Tests for database schema management."""
 
+import aiosqlite
 import pytest
 
 from infobot.db.connection import DatabaseConnection
@@ -100,7 +101,7 @@ async def test_factoids_table_constraints(db_conn_uninitialized: DatabaseConnect
     await db_conn_uninitialized.commit()
 
     # Invalid type should fail
-    with pytest.raises(Exception):  # aiosqlite.IntegrityError
+    with pytest.raises(aiosqlite.IntegrityError):
         await db_conn_uninitialized.execute(
             "INSERT INTO factoids (key, value, type) VALUES (?, ?, ?)",
             ("test3", "value3", "invalid"),
@@ -120,7 +121,7 @@ async def test_factoids_table_primary_key(db_conn_uninitialized: DatabaseConnect
     await db_conn_uninitialized.commit()
 
     # Duplicate (key, type) should fail
-    with pytest.raises(Exception):  # aiosqlite.IntegrityError
+    with pytest.raises(aiosqlite.IntegrityError):
         await db_conn_uninitialized.execute(
             "INSERT INTO factoids (key, value, type) VALUES (?, ?, ?)",
             ("test", "value2", "is"),

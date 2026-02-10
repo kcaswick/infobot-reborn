@@ -1,7 +1,7 @@
-"""CLI entry point for infobot.tools.legacy_import.
+"""CLI entry point for infobot.tools.
 
 Usage:
-    python -m infobot.tools.legacy_import \\
+    python -m infobot.tools \\
         --source /path/to/legacy/data \\
         --database data/infobot.db
 """
