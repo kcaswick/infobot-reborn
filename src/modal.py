@@ -17,6 +17,7 @@ from enum import Enum
 
 import modal
 
+
 # Discord Interactions API protocol types
 class DiscordInteractionType(Enum):
     """Discord interaction types."""
@@ -100,9 +101,7 @@ def authenticate(headers: dict, body: bytes) -> None:
         raise HTTPException(status_code=401, detail="Invalid request signature")
 
 
-async def send_to_discord(
-    payload: dict, app_id: str, interaction_token: str
-) -> None:
+async def send_to_discord(payload: dict, app_id: str, interaction_token: str) -> None:
     """Send response to Discord via interaction webhook.
 
     Args:
@@ -357,9 +356,7 @@ def register_commands(force: bool = False):
 
     # Register each command
     for command in commands:
-        exists = any(
-            cmd.get("name") == command["name"] for cmd in existing_commands
-        )
+        exists = any(cmd.get("name") == command["name"] for cmd in existing_commands)
 
         if exists and not force:
             print(f"✓ Command '{command['name']}' already exists")
@@ -369,19 +366,19 @@ def register_commands(force: bool = False):
         if exists:
             # Find and update existing command
             existing_id = next(
-                cmd["id"]
-                for cmd in existing_commands
-                if cmd["name"] == command["name"]
+                cmd["id"] for cmd in existing_commands if cmd["name"] == command["name"]
             )
             update_url = f"{url}/{existing_id}"
-            response = requests.patch(update_url, headers=headers, json=command, timeout=10)
+            response = requests.patch(
+                update_url, headers=headers, json=command, timeout=10
+            )
         else:
             response = requests.post(url, headers=headers, json=command, timeout=10)
 
         response.raise_for_status()
         print(f"✓ Command '{command['name']}' registered")
 
-    print(f"\n✓ All commands registered successfully!")
+    print("\n✓ All commands registered successfully!")
 
 
 @app.local_entrypoint()

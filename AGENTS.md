@@ -7,8 +7,8 @@
 - Add new dependency: `uv add <package-name>`
 - Add new dev dependency: `uv add --group dev <package-name>`
 - Run locally: `python src/main.py`
-- Run on Modal: `modal serve src/modal.py`
 - Deploy to Modal: `modal deploy src/modal.py`
+- Register Discord commands: `modal run src/modal.py::register_commands`
 - Format code: `black src/ tests/`
 - Lint code: `ruff check src/ tests/`
 - Type check: `mypy src/ tests/`
@@ -32,10 +32,75 @@ All configuration is via environment variables. Copy `.env.example` to `.env` fo
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `DISCORD_BOT_TOKEN` | Yes (for Discord) | — | Discord bot token from Developer Portal |
+| `DISCORD_CLIENT_ID` | Yes (for Modal) | — | Discord application/client ID |
+| `DISCORD_PUBLIC_KEY` | Yes (for Modal) | — | Discord public key for signature verification |
 | `LLM_BASE_URL` | No | `http://localhost:11434/v1` | OpenAI-compatible API base URL |
 | `LLM_MODEL` | No | `qwen3:1.7b` | Model name to request from the LLM server |
 | `DATABASE_PATH` | No | `data/infobot.db` | Path to SQLite database file |
 | `LOG_LEVEL` | No | `INFO` | Logging level |
+
+## Modal Deployment (Production)
+
+The bot uses Discord's Interactions API (HTTP webhooks) for serverless deployment on Modal, not the Gateway API (WebSocket). This is the correct architecture for serverless platforms.
+
+### Architecture
+- **HTTP-based**: FastAPI endpoint receives Discord interactions via webhooks
+- **Signature verification**: Ed25519 cryptographic verification of all requests
+- **Deferred responses**: Long-running operations use Discord's deferred response pattern
+- **Persistent storage**: SQLite database on Modal Volume for factoid storage
+
+### Prerequisites
+1. **Modal account**: Sign up at https://modal.com
+2. **Modal CLI**: `pip install modal` (already in dependencies)
+3. **Discord application**: Create at https://discord.com/developers/applications
+4. **Discord bot configured**:
+   - Enable "bot" and "applications.commands" scopes
+   - Copy Bot Token, Client ID, and Public Key
+
+### Setup Steps
+
+1. **Configure Modal secrets** (in Modal dashboard or CLI):
+   ```bash
+   modal secret create discord-secret \
+     DISCORD_BOT_TOKEN=your_bot_token \
+     DISCORD_CLIENT_ID=your_client_id \
+     DISCORD_PUBLIC_KEY=your_public_key
+   ```
+
+2. **Deploy the application**:
+   ```bash
+   modal deploy src/modal.py
+   ```
+   This will output a webhook URL like `https://your-app--web-app.modal.run/interactions`
+
+3. **Configure Discord webhook**:
+   - Go to Discord Developer Portal → Your Application → General Information
+   - Set "Interactions Endpoint URL" to: `https://your-app--web-app.modal.run/interactions`
+   - Discord will send a PING to verify - the endpoint will respond with PONG
+
+4. **Register slash commands**:
+   ```bash
+   modal run src/modal.py::register_commands
+   ```
+   This registers `/ask` and `/teach` commands with Discord
+
+### Usage
+Users can interact with the bot via:
+- `/ask <question>` - Ask the bot a question
+- `/teach <factoid>` - Teach the bot a new factoid (format: "key is value")
+
+### Development vs Production
+- **Local development**: Use `python src/main.py` with discord.py Gateway API (WebSocket)
+- **Modal production**: Uses Interactions API (HTTP webhooks) - different architecture entirely
+
+### Key Differences from Gateway API
+| Aspect | Gateway API (Local) | Interactions API (Modal) |
+|--------|---------------------|--------------------------|
+| Connection | Persistent WebSocket | HTTP webhooks |
+| Message handling | All messages via events | Only slash commands/interactions |
+| Deployment | Long-running process | Serverless functions |
+| Discord setup | Just bot token | Token + Public Key + Webhook URL |
+| Libraries | discord.py | FastAPI + PyNaCl |
 
 ## Module Structure
 ```
