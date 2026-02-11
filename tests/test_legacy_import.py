@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+import infobot.tools.legacy_import as legacy_import
 from infobot.kb.factoid import FactoidType
 from infobot.kb.store import FactoidStore
 from infobot.tools.legacy_import import (
@@ -23,6 +24,7 @@ from infobot.tools.legacy_import import (
     compute_quality_percentiles,
     configure_import_logging,
     format_quality_histogram,
+    format_quality_sample_previews,
     get_quality_bucket_index,
     import_factoid_file,
     import_legacy_data,
@@ -31,7 +33,9 @@ from infobot.tools.legacy_import import (
     refresh_quality_percentiles,
     resolve_legacy_import_rng_seed,
     resolve_legacy_import_sample_cap,
+    should_emit_quality_diagnostics,
     update_quality_aggregates,
+    validate_diagnostic_cadence,
     validate_quality_threshold,
 )
 
@@ -471,6 +475,67 @@ def test_format_quality_histogram() -> None:
     assert "0.9-1.0:1 (50.0%)" in rendered
 
 
+def test_validate_diagnostic_cadence_rejects_invalid_values() -> None:
+    """Diagnostic cadence validation should reject non-positive values."""
+    with pytest.raises(ValueError, match=r"diagnostic_parsed_interval"):
+        validate_diagnostic_cadence(parsed_interval=0, seconds_interval=1.0)
+
+    with pytest.raises(ValueError, match=r"diagnostic_seconds_interval"):
+        validate_diagnostic_cadence(parsed_interval=10, seconds_interval=0.0)
+
+
+def test_should_emit_quality_diagnostics_cadence() -> None:
+    """Diagnostics should trigger by parsed cadence or elapsed time."""
+    stats = ImportStats(parsed=10)
+
+    assert not should_emit_quality_diagnostics(
+        stats=stats,
+        parsed_since_last=0,
+        elapsed_seconds=60.0,
+        parsed_interval=5,
+        seconds_interval=30.0,
+    )
+    assert should_emit_quality_diagnostics(
+        stats=stats,
+        parsed_since_last=5,
+        elapsed_seconds=0.1,
+        parsed_interval=5,
+        seconds_interval=30.0,
+    )
+    assert should_emit_quality_diagnostics(
+        stats=stats,
+        parsed_since_last=1,
+        elapsed_seconds=31.0,
+        parsed_interval=5,
+        seconds_interval=30.0,
+    )
+
+
+def test_format_quality_sample_previews() -> None:
+    """Sample preview rendering should be bounded and deterministic."""
+    samples = [
+        QualitySample(
+            source_file="facts.txt",
+            line_number=2,
+            key="zeta",
+            value_preview="second",
+            score=0.2,
+        ),
+        QualitySample(
+            source_file="facts.txt",
+            line_number=1,
+            key="alpha",
+            value_preview="first",
+            score=0.9,
+        ),
+    ]
+
+    rendered = format_quality_sample_previews(samples, limit=1)
+    assert rendered.startswith("alpha@1")
+    assert "score=0.90" in rendered
+    assert format_quality_sample_previews([]) == "none"
+
+
 def test_build_threshold_guidance_low_confidence() -> None:
     """Guidance should gate recommendations on sample size."""
     stats = ImportStats()
@@ -535,3 +600,73 @@ async def test_import_factoid_file_populates_quality_telemetry(
     assert len(stats.rejected_samples) <= 2
     assert stats.quality_p50 is not None
     assert stats.quality_p95 is not None
+
+
+@pytest.mark.asyncio
+async def test_import_factoid_file_emits_periodic_diagnostics_by_parsed_cadence(
+    tmp_path: Path,
+    store: FactoidStore,
+    monkeypatch,
+) -> None:
+    """Import should emit diagnostics when parsed cadence threshold is met."""
+    test_file = tmp_path / "diagnostic-parsed-is.txt"
+    test_file.write_text(
+        "a => fact one\n"
+        "b => fact two\n"
+        "c => fact three\n"
+        "d => fact four\n"
+        "e => fact five\n"
+    )
+
+    emit_calls: list[int] = []
+
+    def fake_emit(**_kwargs: object) -> None:
+        emit_calls.append(1)
+
+    monkeypatch.setattr(legacy_import, "emit_quality_diagnostics", fake_emit)
+
+    stats = await import_factoid_file(
+        test_file,
+        FactoidType.IS,
+        store,
+        quality_threshold=0.0,
+        diagnostic_parsed_interval=2,
+        diagnostic_seconds_interval=9999.0,
+        monotonic_clock=lambda: 0.0,
+    )
+
+    assert stats.parsed == 5
+    assert len(emit_calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_import_factoid_file_emits_periodic_diagnostics_by_time_cadence(
+    tmp_path: Path,
+    store: FactoidStore,
+    monkeypatch,
+) -> None:
+    """Import should emit diagnostics when elapsed monotonic time crosses threshold."""
+    test_file = tmp_path / "diagnostic-time-is.txt"
+    test_file.write_text("a => one\n" "b => two\n" "c => three\n")
+
+    emit_calls: list[int] = []
+
+    def fake_emit(**_kwargs: object) -> None:
+        emit_calls.append(1)
+
+    monotonic_values = iter([0.0, 0.4, 1.2, 1.4])
+
+    monkeypatch.setattr(legacy_import, "emit_quality_diagnostics", fake_emit)
+
+    stats = await import_factoid_file(
+        test_file,
+        FactoidType.IS,
+        store,
+        quality_threshold=0.0,
+        diagnostic_parsed_interval=100,
+        diagnostic_seconds_interval=1.0,
+        monotonic_clock=lambda: next(monotonic_values),
+    )
+
+    assert stats.parsed == 3
+    assert len(emit_calls) == 1

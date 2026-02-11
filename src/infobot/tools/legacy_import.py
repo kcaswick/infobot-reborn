@@ -12,7 +12,8 @@ import logging
 import os
 import random
 import re
-from collections.abc import Sequence
+import time
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from math import ceil
 from pathlib import Path
@@ -30,6 +31,9 @@ QUALITY_PERCENTILES = (50, 75, 90, 95)
 DEFAULT_LEGACY_IMPORT_SAMPLE_CAP = 20
 DEFAULT_LEGACY_IMPORT_RNG_SEED = 1337
 DEFAULT_QUALITY_SAMPLE_PREVIEW_CHARS = 96
+DEFAULT_DIAGNOSTIC_PARSED_INTERVAL = 500
+DEFAULT_DIAGNOSTIC_SECONDS_INTERVAL = 30.0
+DEFAULT_DIAGNOSTIC_SAMPLE_PREVIEW_LIMIT = 3
 
 
 @dataclass(frozen=True)
@@ -320,6 +324,110 @@ def calculate_quality_average(stats: ImportStats) -> float | None:
     return stats.quality_score_sum / stats.quality_observations
 
 
+def validate_diagnostic_cadence(
+    parsed_interval: int,
+    seconds_interval: float,
+) -> None:
+    """Validate periodic diagnostic cadence parameters."""
+    if parsed_interval <= 0:
+        raise ValueError(
+            "diagnostic_parsed_interval must be > 0 " f"(got {parsed_interval})"
+        )
+    if seconds_interval <= 0:
+        raise ValueError(
+            "diagnostic_seconds_interval must be > 0 " f"(got {seconds_interval})"
+        )
+
+
+def should_emit_quality_diagnostics(
+    stats: ImportStats,
+    parsed_since_last: int,
+    elapsed_seconds: float,
+    parsed_interval: int,
+    seconds_interval: float,
+) -> bool:
+    """Determine if periodic diagnostics should be emitted."""
+    if stats.parsed == 0 or parsed_since_last <= 0:
+        return False
+
+    if parsed_since_last >= parsed_interval:
+        return True
+
+    return elapsed_seconds >= seconds_interval
+
+
+def format_quality_sample_previews(
+    samples: Sequence[QualitySample],
+    limit: int = DEFAULT_DIAGNOSTIC_SAMPLE_PREVIEW_LIMIT,
+) -> str:
+    """Render sample previews as a compact, stable string."""
+    if limit <= 0:
+        raise ValueError(f"limit must be > 0 (got {limit})")
+
+    if not samples:
+        return "none"
+
+    preview_items = sorted(
+        samples,
+        key=lambda sample: (sample.source_file, sample.line_number, sample.key),
+    )[:limit]
+    return " | ".join(
+        (
+            f"{sample.key}@{sample.line_number} "
+            f"(score={sample.score:.2f}) -> {sample.value_preview}"
+        )
+        for sample in preview_items
+    )
+
+
+def emit_quality_diagnostics(
+    stats: ImportStats,
+    file_path: Path,
+    factoid_type: FactoidType,
+    quality_threshold: float,
+) -> None:
+    """Emit a periodic quality diagnostics snapshot."""
+    quality_average = calculate_quality_average(stats)
+    reject_rate = (
+        stats.rejected_candidates / stats.quality_observations
+        if stats.quality_observations
+        else 0.0
+    )
+    histogram = format_quality_histogram(stats.quality_buckets)
+    min_score = stats.quality_min if stats.quality_min is not None else 0.0
+    max_score = stats.quality_max if stats.quality_max is not None else 0.0
+    avg_score = quality_average if quality_average is not None else 0.0
+
+    logger.info(
+        "Quality diagnostics [%s/%s]: parsed=%d imported=%d rejected=%d "
+        "reject_rate=%.1f%% threshold=%.2f score[min=%.2f avg=%.2f max=%.2f] "
+        "hist=%s",
+        factoid_type.value,
+        file_path.name,
+        stats.parsed,
+        stats.imported,
+        stats.rejected_candidates,
+        reject_rate * 100,
+        quality_threshold,
+        min_score,
+        avg_score,
+        max_score,
+        histogram,
+    )
+    logger.info(
+        "Accepted sample previews [%s/%s]: %s",
+        factoid_type.value,
+        file_path.name,
+        format_quality_sample_previews(stats.accepted_samples),
+    )
+    logger.info(
+        "Rejected sample previews [%s/%s]: %s",
+        factoid_type.value,
+        file_path.name,
+        format_quality_sample_previews(stats.rejected_samples),
+    )
+
+
 def format_quality_histogram(bucket_counts: Sequence[int]) -> str:
     """Format quality histogram as compact bucket summary text."""
     if len(bucket_counts) != QUALITY_BUCKET_COUNT:
@@ -557,6 +665,9 @@ async def import_factoid_file(
     stats: ImportStats | None = None,
     sample_cap: int | None = None,
     rng: random.Random | None = None,
+    diagnostic_parsed_interval: int = DEFAULT_DIAGNOSTIC_PARSED_INTERVAL,
+    diagnostic_seconds_interval: float = DEFAULT_DIAGNOSTIC_SECONDS_INTERVAL,
+    monotonic_clock: Callable[[], float] = time.monotonic,
 ) -> ImportStats:
     """Import a legacy factoid file into the database.
 
@@ -568,16 +679,25 @@ async def import_factoid_file(
         stats: Optional stats accumulator.
         sample_cap: Optional reservoir sample cap override.
         rng: Optional deterministic RNG for sampling.
+        diagnostic_parsed_interval: Parsed candidate cadence for diagnostics.
+        diagnostic_seconds_interval: Time cadence for diagnostics.
+        monotonic_clock: Clock function for elapsed-time checks.
 
     Returns:
         ImportStats with import statistics.
     """
     validate_quality_threshold(quality_threshold)
+    validate_diagnostic_cadence(
+        parsed_interval=diagnostic_parsed_interval,
+        seconds_interval=diagnostic_seconds_interval,
+    )
     resolved_sample_cap = resolve_legacy_import_sample_cap(sample_cap)
     quality_rng = rng if rng is not None else build_quality_rng()
 
     if stats is None:
         stats = ImportStats()
+    last_diagnostic_parsed = stats.parsed
+    last_diagnostic_mono = monotonic_clock()
     logger.info(f"Importing {factoid_type.value} factoids from {file_path}")
 
     if not file_path.exists():
@@ -631,6 +751,25 @@ async def import_factoid_file(
                     sample_cap=resolved_sample_cap,
                     rng=quality_rng,
                 )
+
+                now_mono = monotonic_clock()
+                parsed_since_last = stats.parsed - last_diagnostic_parsed
+                elapsed_seconds = now_mono - last_diagnostic_mono
+                if should_emit_quality_diagnostics(
+                    stats=stats,
+                    parsed_since_last=parsed_since_last,
+                    elapsed_seconds=elapsed_seconds,
+                    parsed_interval=diagnostic_parsed_interval,
+                    seconds_interval=diagnostic_seconds_interval,
+                ):
+                    emit_quality_diagnostics(
+                        stats=stats,
+                        file_path=file_path,
+                        factoid_type=factoid_type,
+                        quality_threshold=quality_threshold,
+                    )
+                    last_diagnostic_parsed = stats.parsed
+                    last_diagnostic_mono = now_mono
 
                 if not is_accepted:
                     stats.skipped_low_quality += 1
