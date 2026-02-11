@@ -19,6 +19,8 @@ from infobot.kb.factoid import Factoid, FactoidType
 from infobot.kb.store import FactoidExistsError, FactoidStore
 
 logger = logging.getLogger(__name__)
+LOGGER_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+_LEGACY_IMPORT_HANDLER_TAG = "_legacy_import_handler"
 
 
 @dataclass
@@ -150,6 +152,51 @@ def parse_factoid_line(line: str) -> tuple[str, str] | None:
         return None
 
 
+def configure_import_logging(verbose: bool) -> logging.Logger:
+    """Configure module-scoped logging for legacy import CLI.
+
+    This avoids mutating root logger configuration, which prevents dependency
+    debug logs (e.g., aiosqlite) from flooding verbose output.
+
+    Args:
+        verbose: Whether debug-level logging should be enabled.
+
+    Returns:
+        Configured module logger.
+    """
+    log_level = logging.DEBUG if verbose else logging.INFO
+    logger.setLevel(log_level)
+    logger.propagate = False
+
+    # Remove previously configured module handlers to keep setup idempotent.
+    for handler in list(logger.handlers):
+        if getattr(handler, _LEGACY_IMPORT_HANDLER_TAG, False):
+            logger.removeHandler(handler)
+
+    handler = logging.StreamHandler()
+    handler.setLevel(log_level)
+    handler.setFormatter(logging.Formatter(LOGGER_FORMAT))
+    setattr(handler, _LEGACY_IMPORT_HANDLER_TAG, True)
+    logger.addHandler(handler)
+    return logger
+
+
+def validate_quality_threshold(quality_threshold: float) -> None:
+    """Validate quality threshold is in the inclusive range [0.0, 1.0].
+
+    Args:
+        quality_threshold: Threshold value to validate.
+
+    Raises:
+        ValueError: If quality threshold is outside [0.0, 1.0].
+    """
+    if not 0.0 <= quality_threshold <= 1.0:
+        raise ValueError(
+            "quality-threshold must be between 0.0 and 1.0 "
+            f"(got {quality_threshold})"
+        )
+
+
 async def import_factoid_file(
     file_path: Path,
     factoid_type: FactoidType,
@@ -167,6 +214,8 @@ async def import_factoid_file(
     Returns:
         ImportStats with import statistics.
     """
+    validate_quality_threshold(quality_threshold)
+
     stats = ImportStats()
     logger.info(f"Importing {factoid_type.value} factoids from {file_path}")
 
@@ -257,6 +306,8 @@ async def import_legacy_data(
     Returns:
         Combined ImportStats for all files.
     """
+    validate_quality_threshold(quality_threshold)
+
     logger.info(f"Starting legacy import from {source_dir}")
     logger.info(f"Database: {db_path}")
     logger.info(f"Quality threshold: {quality_threshold}")
@@ -358,11 +409,13 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    # Configure logging
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    )
+    # Configure module-scoped logging without polluting root logger.
+    configure_import_logging(verbose=args.verbose)
+
+    try:
+        validate_quality_threshold(args.quality_threshold)
+    except ValueError as e:
+        parser.error(str(e))
 
     # Run import
     stats = asyncio.run(

@@ -1,5 +1,6 @@
 """Tests for legacy factoid import functionality."""
 
+import logging
 from pathlib import Path
 
 import pytest
@@ -9,9 +10,11 @@ from infobot.kb.store import FactoidStore
 from infobot.tools.legacy_import import (
     calculate_quality_score,
     clean_irc_formatting,
+    configure_import_logging,
     import_factoid_file,
     import_legacy_data,
     parse_factoid_line,
+    validate_quality_threshold,
 )
 
 
@@ -225,3 +228,67 @@ async def test_import_legacy_data_no_files(tmp_path: Path, db_conn):
             source_dir=tmp_path,
             db_path=db_path,
         )
+
+
+@pytest.mark.parametrize("threshold", [0.0, 0.3, 1.0])
+def test_validate_quality_threshold_valid(threshold: float) -> None:
+    """Threshold validation accepts inclusive bounds."""
+    validate_quality_threshold(threshold)
+
+
+@pytest.mark.parametrize("threshold", [-0.01, 1.01])
+def test_validate_quality_threshold_invalid(threshold: float) -> None:
+    """Threshold validation rejects out-of-range values."""
+    with pytest.raises(
+        ValueError, match=r"quality-threshold must be between 0.0 and 1.0"
+    ):
+        validate_quality_threshold(threshold)
+
+
+@pytest.mark.asyncio
+async def test_import_legacy_data_invalid_threshold_fails_fast(
+    tmp_path: Path, db_conn
+) -> None:
+    """Invalid threshold is rejected before file scanning/import."""
+    db_path = Path(db_conn.db_path)
+    with pytest.raises(
+        ValueError, match=r"quality-threshold must be between 0.0 and 1.0"
+    ):
+        await import_legacy_data(
+            source_dir=tmp_path,
+            db_path=db_path,
+            quality_threshold=1.2,
+        )
+
+
+def test_configure_import_logging_idempotent_and_root_safe() -> None:
+    """Module logging setup should be idempotent and avoid root pollution."""
+    root_logger = logging.getLogger()
+    root_handlers_before = tuple(root_logger.handlers)
+    root_level_before = root_logger.level
+
+    module_logger = logging.getLogger("infobot.tools.legacy_import")
+
+    # Clean up tagged handlers from prior tests to ensure deterministic assertions.
+    for handler in list(module_logger.handlers):
+        if getattr(handler, "_legacy_import_handler", False):
+            module_logger.removeHandler(handler)
+
+    try:
+        configure_import_logging(verbose=False)
+        configure_import_logging(verbose=True)
+
+        tagged_handlers = [
+            handler
+            for handler in module_logger.handlers
+            if getattr(handler, "_legacy_import_handler", False)
+        ]
+        assert len(tagged_handlers) == 1
+        assert module_logger.level == logging.DEBUG
+        assert module_logger.propagate is False
+        assert tuple(root_logger.handlers) == root_handlers_before
+        assert root_logger.level == root_level_before
+    finally:
+        for handler in list(module_logger.handlers):
+            if getattr(handler, "_legacy_import_handler", False):
+                module_logger.removeHandler(handler)
