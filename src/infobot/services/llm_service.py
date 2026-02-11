@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 from dataclasses import dataclass
-from typing import Optional, TypedDict
+from typing import Any, Optional, Protocol, TypedDict
 
 from openai import (
     APIConnectionError,
@@ -23,6 +23,21 @@ class ChatMessage(TypedDict):
 
     role: str
     content: str
+
+
+class _ChatCompletionsProtocol(Protocol):
+    async def create(self, **kwargs: object) -> Any:
+        """Create a chat completion."""
+
+
+class _ChatProtocol(Protocol):
+    completions: _ChatCompletionsProtocol
+
+
+class LlmClientProtocol(Protocol):
+    """Minimal client protocol needed for chat completions."""
+
+    chat: _ChatProtocol
 
 
 @dataclass(frozen=True)
@@ -53,7 +68,7 @@ class LlmService:
         model: str,
         base_url: str,
         api_key: Optional[str] = None,
-        client: Optional[AsyncOpenAI] = None,
+        client: Optional[LlmClientProtocol] = None,
         timeout_seconds: float = 30.0,
         max_retries: int = 2,
         retry_backoff_seconds: float = 0.5,

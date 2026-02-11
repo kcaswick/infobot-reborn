@@ -89,7 +89,14 @@ class _FakeClient:
     """Mock OpenAI-compatible client for testing."""
 
     def __init__(self, responses: list[object]) -> None:
-        self.chat = SimpleNamespace(completions=_FakeChatCompletions(responses))
+        self.chat = _FakeChat(responses)
+
+
+class _FakeChat:
+    """Mock chat namespace for OpenAI-compatible client."""
+
+    def __init__(self, responses: list[object]) -> None:
+        self.completions = _FakeChatCompletions(responses)
 
 
 @pytest.fixture
