@@ -172,3 +172,7 @@ cython_debug/
 
 # bv (beads viewer) local config and caches
 .bv/
+
+# ntm local state (keep shared config if present)
+.ntm/
+!.ntm/config.toml
