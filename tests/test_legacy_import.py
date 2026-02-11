@@ -1,6 +1,7 @@
 """Tests for legacy factoid import functionality."""
 
 import logging
+import random
 from pathlib import Path
 
 import pytest
@@ -8,12 +9,29 @@ import pytest
 from infobot.kb.factoid import FactoidType
 from infobot.kb.store import FactoidStore
 from infobot.tools.legacy_import import (
+    DEFAULT_LEGACY_IMPORT_RNG_SEED,
+    DEFAULT_LEGACY_IMPORT_SAMPLE_CAP,
+    ImportStats,
+    QualitySample,
+    ThresholdGuidance,
+    build_quality_rng,
+    build_quality_sample,
+    build_threshold_guidance,
+    calculate_quality_average,
     calculate_quality_score,
     clean_irc_formatting,
+    compute_quality_percentiles,
     configure_import_logging,
+    format_quality_histogram,
+    get_quality_bucket_index,
     import_factoid_file,
     import_legacy_data,
     parse_factoid_line,
+    record_quality_sample,
+    refresh_quality_percentiles,
+    resolve_legacy_import_rng_seed,
+    resolve_legacy_import_sample_cap,
+    update_quality_aggregates,
     validate_quality_threshold,
 )
 
@@ -22,19 +40,18 @@ def test_clean_irc_formatting_bold():
     """Test cleaning bold IRC formatting."""
     assert clean_irc_formatting("\x02bold text\x02") == "**bold text**"
     assert (
-        clean_irc_formatting("normal \x02bold\x02 normal")
-        == "normal **bold** normal"
+        clean_irc_formatting("normal \x02bold\x02 normal") == "normal **bold** normal"
     )
 
 
 def test_clean_irc_formatting_italic():
     """Test cleaning italic IRC formatting."""
-    assert clean_irc_formatting("\x1Ditalic text\x1D") == "*italic text*"
+    assert clean_irc_formatting("\x1ditalic text\x1d") == "*italic text*"
 
 
 def test_clean_irc_formatting_underline():
     """Test cleaning underline IRC formatting."""
-    assert clean_irc_formatting("\x1Funderline text\x1F") == "__underline text__"
+    assert clean_irc_formatting("\x1funderline text\x1f") == "__underline text__"
 
 
 def test_clean_irc_formatting_color_codes():
@@ -51,7 +68,7 @@ def test_clean_irc_formatting_control_chars():
 
 def test_clean_irc_formatting_combined():
     """Test cleaning multiple IRC formatting codes."""
-    text = "\x02bold\x02 and \x1Ditalic\x1D and \x0304color"
+    text = "\x02bold\x02 and \x1ditalic\x1d and \x0304color"
     expected = "**bold** and *italic* and color"
     assert clean_irc_formatting(text) == expected
 
@@ -158,7 +175,7 @@ async def test_import_factoid_file_with_irc_formatting(
 ):
     """Test that IRC formatting is cleaned during import."""
     test_file = tmp_path / "test-is.txt"
-    test_file.write_text("test => \x02bold text\x02 and \x1Ditalic\x1D\n")
+    test_file.write_text("test => \x02bold text\x02 and \x1ditalic\x1d\n")
 
     stats = await import_factoid_file(test_file, FactoidType.IS, store)
 
@@ -292,3 +309,229 @@ def test_configure_import_logging_idempotent_and_root_safe() -> None:
         for handler in list(module_logger.handlers):
             if getattr(handler, "_legacy_import_handler", False):
                 module_logger.removeHandler(handler)
+
+
+def test_resolve_legacy_import_sample_cap_defaults(monkeypatch) -> None:
+    """Sample cap should default when env var is absent."""
+    monkeypatch.delenv("LEGACY_IMPORT_SAMPLE_CAP", raising=False)
+    assert resolve_legacy_import_sample_cap() == DEFAULT_LEGACY_IMPORT_SAMPLE_CAP
+
+
+def test_resolve_legacy_import_sample_cap_from_env(monkeypatch) -> None:
+    """Sample cap should read integer env override."""
+    monkeypatch.setenv("LEGACY_IMPORT_SAMPLE_CAP", "7")
+    assert resolve_legacy_import_sample_cap() == 7
+
+
+@pytest.mark.parametrize("raw_value", ["abc", "-1"])
+def test_resolve_legacy_import_sample_cap_invalid_env(
+    monkeypatch, raw_value: str
+) -> None:
+    """Sample cap env validation should reject malformed values."""
+    monkeypatch.setenv("LEGACY_IMPORT_SAMPLE_CAP", raw_value)
+    with pytest.raises(ValueError, match=r"LEGACY_IMPORT_SAMPLE_CAP"):
+        resolve_legacy_import_sample_cap()
+
+
+def test_resolve_legacy_import_rng_seed_defaults(monkeypatch) -> None:
+    """RNG seed should default when env var is absent."""
+    monkeypatch.delenv("LEGACY_IMPORT_RNG_SEED", raising=False)
+    assert resolve_legacy_import_rng_seed() == DEFAULT_LEGACY_IMPORT_RNG_SEED
+
+
+def test_resolve_legacy_import_rng_seed_from_env(monkeypatch) -> None:
+    """RNG seed should read integer env override."""
+    monkeypatch.setenv("LEGACY_IMPORT_RNG_SEED", "11")
+    assert resolve_legacy_import_rng_seed() == 11
+
+
+def test_resolve_legacy_import_rng_seed_invalid_env(monkeypatch) -> None:
+    """RNG seed env validation should reject malformed values."""
+    monkeypatch.setenv("LEGACY_IMPORT_RNG_SEED", "seed")
+    with pytest.raises(ValueError, match=r"LEGACY_IMPORT_RNG_SEED"):
+        resolve_legacy_import_rng_seed()
+
+
+def test_build_quality_rng_is_deterministic(monkeypatch) -> None:
+    """Helper should produce deterministic RNG instances for same seed."""
+    monkeypatch.setenv("LEGACY_IMPORT_RNG_SEED", "5")
+    first = build_quality_rng()
+    second = build_quality_rng()
+    assert first.random() == second.random()
+
+
+@pytest.mark.parametrize(
+    ("score", "expected_bucket"),
+    [
+        (-0.1, 0),
+        (0.0, 0),
+        (0.099, 0),
+        (0.1, 1),
+        (0.55, 5),
+        (0.999, 9),
+        (1.0, 9),
+        (2.0, 9),
+    ],
+)
+def test_get_quality_bucket_index(score: float, expected_bucket: int) -> None:
+    """Score-to-bucket mapping should clamp and bin as expected."""
+    assert get_quality_bucket_index(score) == expected_bucket
+
+
+def test_update_quality_aggregates_tracks_counts() -> None:
+    """Aggregate helper should update counters and histogram."""
+    stats = ImportStats()
+    update_quality_aggregates(stats, quality_score=0.2, accepted=False)
+    update_quality_aggregates(stats, quality_score=0.8, accepted=True)
+
+    assert stats.quality_observations == 2
+    assert stats.accepted_candidates == 1
+    assert stats.rejected_candidates == 1
+    assert stats.quality_min == 0.2
+    assert stats.quality_max == 0.8
+    assert sum(stats.quality_buckets) == 2
+
+
+def test_build_quality_sample_truncates_preview() -> None:
+    """Quality sample preview should collapse whitespace and truncate."""
+    sample = build_quality_sample(
+        source_file="facts.txt",
+        line_number=4,
+        key="python",
+        value="   value with   extra   spaces   ",
+        quality_score=0.6,
+        preview_chars=5,
+    )
+    assert sample.value_preview == "value..."
+    assert sample.score == 0.6
+
+
+def test_record_quality_sample_uses_reservoir_sampling() -> None:
+    """Reservoir sampling should stay bounded and deterministic by seed."""
+
+    def collect_sample_keys(seed: int) -> list[str]:
+        local_stats = ImportStats()
+        local_rng = random.Random(seed)
+        for idx in range(25):
+            update_quality_aggregates(local_stats, quality_score=0.7, accepted=True)
+            record_quality_sample(
+                stats=local_stats,
+                sample=QualitySample(
+                    source_file="facts.txt",
+                    line_number=idx + 1,
+                    key=f"key-{idx}",
+                    value_preview=f"value-{idx}",
+                    score=0.7,
+                ),
+                accepted=True,
+                sample_cap=5,
+                rng=local_rng,
+            )
+        return [sample.key for sample in local_stats.accepted_samples]
+
+    first = collect_sample_keys(1234)
+    second = collect_sample_keys(1234)
+    assert len(first) == 5
+    assert first == second
+
+
+def test_compute_quality_percentiles_handles_empty_and_clustered() -> None:
+    """Percentile helper should handle no data and clustered buckets."""
+    assert compute_quality_percentiles([0] * 10) == {
+        50: None,
+        75: None,
+        90: None,
+        95: None,
+    }
+
+    clustered = [0, 0, 0, 0, 0, 10, 0, 0, 0, 0]
+    percentile_values = compute_quality_percentiles(clustered)
+    assert percentile_values[50] is not None
+    assert percentile_values[50] >= 0.5
+    assert percentile_values[95] <= 0.6
+
+
+def test_refresh_quality_percentiles_and_average() -> None:
+    """Stats percentile fields and average should derive from buckets/sum."""
+    stats = ImportStats(
+        quality_observations=4,
+        quality_score_sum=2.0,
+        quality_buckets=[0, 0, 1, 1, 1, 1, 0, 0, 0, 0],
+    )
+    refresh_quality_percentiles(stats)
+    assert calculate_quality_average(stats) == 0.5
+    assert stats.quality_p50 is not None
+    assert stats.quality_p95 is not None
+
+
+def test_format_quality_histogram() -> None:
+    """Histogram formatter should emit bucket labels and percentages."""
+    rendered = format_quality_histogram([1, 0, 0, 0, 0, 0, 0, 0, 0, 1])
+    assert "0.0-0.1:1 (50.0%)" in rendered
+    assert "0.9-1.0:1 (50.0%)" in rendered
+
+
+def test_build_threshold_guidance_low_confidence() -> None:
+    """Guidance should gate recommendations on sample size."""
+    stats = ImportStats()
+    guidance = build_threshold_guidance(
+        stats,
+        quality_threshold=0.3,
+        min_sample_size=10,
+    )
+    assert isinstance(guidance, ThresholdGuidance)
+    assert guidance.confidence == "low"
+    assert guidance.suggested_threshold is None
+
+
+def test_build_threshold_guidance_high_reject_rate() -> None:
+    """Guidance should suggest lowering threshold for high reject rates."""
+    stats = ImportStats()
+    for _ in range(90):
+        update_quality_aggregates(stats, quality_score=0.2, accepted=False)
+    for _ in range(10):
+        update_quality_aggregates(stats, quality_score=0.9, accepted=True)
+
+    guidance = build_threshold_guidance(
+        stats,
+        quality_threshold=0.8,
+        min_sample_size=20,
+    )
+    assert isinstance(guidance, ThresholdGuidance)
+    assert guidance.confidence == "medium"
+    assert guidance.suggested_threshold is not None
+    assert guidance.suggested_threshold <= 0.8
+
+
+@pytest.mark.asyncio
+async def test_import_factoid_file_populates_quality_telemetry(
+    tmp_path: Path,
+    store: FactoidStore,
+) -> None:
+    """Import should update quality counters, buckets, percentiles, samples."""
+    test_file = tmp_path / "telemetry-is.txt"
+    test_file.write_text(
+        "python => a high level programming language\n"
+        "short => hi\n"
+        "docs => see https://example.com/reference for docs\n"
+        "invalid line\n"
+    )
+
+    stats = await import_factoid_file(
+        test_file,
+        FactoidType.IS,
+        store,
+        quality_threshold=0.5,
+        sample_cap=2,
+        rng=random.Random(99),
+    )
+
+    assert stats.quality_observations == stats.parsed
+    assert stats.rejected_candidates >= 1
+    assert stats.accepted_candidates >= 1
+    assert stats.accepted_candidates + stats.rejected_candidates == stats.parsed
+    assert sum(stats.quality_buckets) == stats.quality_observations
+    assert len(stats.accepted_samples) <= 2
+    assert len(stats.rejected_samples) <= 2
+    assert stats.quality_p50 is not None
+    assert stats.quality_p95 is not None

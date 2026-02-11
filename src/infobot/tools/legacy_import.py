@@ -9,8 +9,12 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import os
+import random
 import re
-from dataclasses import dataclass
+from collections.abc import Sequence
+from dataclasses import dataclass, field
+from math import ceil
 from pathlib import Path
 
 from infobot.db.connection import DatabaseConnection
@@ -21,6 +25,32 @@ from infobot.kb.store import FactoidExistsError, FactoidStore
 logger = logging.getLogger(__name__)
 LOGGER_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 _LEGACY_IMPORT_HANDLER_TAG = "_legacy_import_handler"
+QUALITY_BUCKET_COUNT = 10
+QUALITY_PERCENTILES = (50, 75, 90, 95)
+DEFAULT_LEGACY_IMPORT_SAMPLE_CAP = 20
+DEFAULT_LEGACY_IMPORT_RNG_SEED = 1337
+DEFAULT_QUALITY_SAMPLE_PREVIEW_CHARS = 96
+
+
+@dataclass(frozen=True)
+class QualitySample:
+    """A sampled factoid quality observation for diagnostics."""
+
+    source_file: str
+    line_number: int
+    key: str
+    value_preview: str
+    score: float
+
+
+@dataclass(frozen=True)
+class ThresholdGuidance:
+    """Preliminary quality-threshold tuning guidance."""
+
+    current_threshold: float
+    suggested_threshold: float | None
+    confidence: str
+    rationale: str
 
 
 @dataclass
@@ -34,6 +64,330 @@ class ImportStats:
     imported: int = 0
     duplicates: int = 0
     errors: int = 0
+    quality_observations: int = 0
+    quality_score_sum: float = 0.0
+    quality_min: float | None = None
+    quality_max: float | None = None
+    quality_buckets: list[int] = field(
+        default_factory=lambda: [0] * QUALITY_BUCKET_COUNT
+    )
+    quality_p50: float | None = None
+    quality_p75: float | None = None
+    quality_p90: float | None = None
+    quality_p95: float | None = None
+    accepted_candidates: int = 0
+    rejected_candidates: int = 0
+    accepted_samples: list[QualitySample] = field(default_factory=list)
+    rejected_samples: list[QualitySample] = field(default_factory=list)
+
+
+def resolve_legacy_import_sample_cap(sample_cap: int | None = None) -> int:
+    """Resolve sampling reservoir cap from args or environment.
+
+    Args:
+        sample_cap: Optional override value.
+
+    Returns:
+        Effective sample cap.
+
+    Raises:
+        ValueError: If the value is invalid.
+    """
+    if sample_cap is None:
+        raw_sample_cap = os.getenv("LEGACY_IMPORT_SAMPLE_CAP")
+        if raw_sample_cap is None:
+            sample_cap = DEFAULT_LEGACY_IMPORT_SAMPLE_CAP
+        else:
+            try:
+                sample_cap = int(raw_sample_cap)
+            except ValueError as e:
+                raise ValueError(
+                    "LEGACY_IMPORT_SAMPLE_CAP must be an integer "
+                    f"(got {raw_sample_cap!r})"
+                ) from e
+
+    if sample_cap < 0:
+        raise ValueError("LEGACY_IMPORT_SAMPLE_CAP must be >= 0 " f"(got {sample_cap})")
+
+    return sample_cap
+
+
+def resolve_legacy_import_rng_seed(rng_seed: int | None = None) -> int:
+    """Resolve deterministic RNG seed from args or environment.
+
+    Args:
+        rng_seed: Optional override value.
+
+    Returns:
+        Effective RNG seed.
+
+    Raises:
+        ValueError: If the value is invalid.
+    """
+    if rng_seed is not None:
+        return rng_seed
+
+    raw_seed = os.getenv("LEGACY_IMPORT_RNG_SEED")
+    if raw_seed is None:
+        return DEFAULT_LEGACY_IMPORT_RNG_SEED
+
+    try:
+        return int(raw_seed)
+    except ValueError as e:
+        raise ValueError(
+            "LEGACY_IMPORT_RNG_SEED must be an integer " f"(got {raw_seed!r})"
+        ) from e
+
+
+def build_quality_rng(rng_seed: int | None = None) -> random.Random:
+    """Build deterministic RNG for quality sample reservoirs."""
+    return random.Random(resolve_legacy_import_rng_seed(rng_seed))
+
+
+def clamp_quality_score(quality_score: float) -> float:
+    """Clamp a quality score into the inclusive [0.0, 1.0] range."""
+    return max(0.0, min(1.0, quality_score))
+
+
+def get_quality_bucket_index(quality_score: float) -> int:
+    """Map quality score to one of 10 buckets in [0.0, 1.0]."""
+    clamped_score = clamp_quality_score(quality_score)
+    if clamped_score >= 1.0:
+        return QUALITY_BUCKET_COUNT - 1
+    return int(clamped_score * QUALITY_BUCKET_COUNT)
+
+
+def get_quality_bucket_label(bucket_index: int) -> str:
+    """Return the printable label for a bucket index."""
+    if not 0 <= bucket_index < QUALITY_BUCKET_COUNT:
+        raise ValueError(
+            f"bucket_index must be in [0, {QUALITY_BUCKET_COUNT - 1}] "
+            f"(got {bucket_index})"
+        )
+
+    lower = bucket_index / QUALITY_BUCKET_COUNT
+    upper = (bucket_index + 1) / QUALITY_BUCKET_COUNT
+    return f"{lower:.1f}-{upper:.1f}"
+
+
+def update_quality_aggregates(
+    stats: ImportStats,
+    quality_score: float,
+    accepted: bool,
+) -> None:
+    """Update aggregate quality counters and histogram buckets."""
+    clamped_score = clamp_quality_score(quality_score)
+    stats.quality_observations += 1
+    stats.quality_score_sum += clamped_score
+    stats.quality_min = (
+        clamped_score
+        if stats.quality_min is None
+        else min(stats.quality_min, clamped_score)
+    )
+    stats.quality_max = (
+        clamped_score
+        if stats.quality_max is None
+        else max(stats.quality_max, clamped_score)
+    )
+    stats.quality_buckets[get_quality_bucket_index(clamped_score)] += 1
+
+    if accepted:
+        stats.accepted_candidates += 1
+    else:
+        stats.rejected_candidates += 1
+
+
+def build_quality_sample(
+    source_file: str,
+    line_number: int,
+    key: str,
+    value: str,
+    quality_score: float,
+    preview_chars: int = DEFAULT_QUALITY_SAMPLE_PREVIEW_CHARS,
+) -> QualitySample:
+    """Build a lightweight quality sample preview record."""
+    compact_value = " ".join(value.split())
+    if len(compact_value) > preview_chars:
+        value_preview = f"{compact_value[:preview_chars]}..."
+    else:
+        value_preview = compact_value
+
+    return QualitySample(
+        source_file=source_file,
+        line_number=line_number,
+        key=key,
+        value_preview=value_preview,
+        score=clamp_quality_score(quality_score),
+    )
+
+
+def reservoir_sample_insert(
+    reservoir: list[QualitySample],
+    sample: QualitySample,
+    population_seen: int,
+    sample_cap: int,
+    rng: random.Random,
+) -> None:
+    """Update a bounded reservoir using algorithm R."""
+    if sample_cap <= 0:
+        return
+
+    if len(reservoir) < sample_cap:
+        reservoir.append(sample)
+        return
+
+    replacement_index = rng.randrange(population_seen)
+    if replacement_index < sample_cap:
+        reservoir[replacement_index] = sample
+
+
+def record_quality_sample(
+    stats: ImportStats,
+    sample: QualitySample,
+    accepted: bool,
+    sample_cap: int,
+    rng: random.Random,
+) -> None:
+    """Record sample into accepted/rejected reservoir sets."""
+    reservoir = stats.accepted_samples if accepted else stats.rejected_samples
+    population_seen = (
+        stats.accepted_candidates if accepted else stats.rejected_candidates
+    )
+    reservoir_sample_insert(
+        reservoir=reservoir,
+        sample=sample,
+        population_seen=population_seen,
+        sample_cap=sample_cap,
+        rng=rng,
+    )
+
+
+def compute_quality_percentiles(
+    bucket_counts: Sequence[int],
+    percentiles: Sequence[int] = QUALITY_PERCENTILES,
+) -> dict[int, float | None]:
+    """Approximate percentile values from fixed-width histogram buckets."""
+    if len(bucket_counts) != QUALITY_BUCKET_COUNT:
+        raise ValueError(
+            f"bucket_counts must have {QUALITY_BUCKET_COUNT} buckets "
+            f"(got {len(bucket_counts)})"
+        )
+
+    total_samples = sum(bucket_counts)
+    if total_samples == 0:
+        return {percentile: None for percentile in percentiles}
+
+    results: dict[int, float | None] = {}
+    for percentile in percentiles:
+        if not 0 <= percentile <= 100:
+            raise ValueError(f"percentile must be in [0, 100] (got {percentile})")
+
+        target_rank = max(1, ceil(total_samples * (percentile / 100)))
+        cumulative = 0
+        for bucket_index, bucket_count in enumerate(bucket_counts):
+            cumulative += bucket_count
+            if cumulative < target_rank:
+                continue
+
+            lower = bucket_index / QUALITY_BUCKET_COUNT
+            upper = (bucket_index + 1) / QUALITY_BUCKET_COUNT
+            previous = cumulative - bucket_count
+            if bucket_count == 0:
+                interpolated = upper
+            else:
+                position = (target_rank - previous) / bucket_count
+                interpolated = lower + (upper - lower) * position
+
+            results[percentile] = clamp_quality_score(interpolated)
+            break
+
+    return results
+
+
+def refresh_quality_percentiles(stats: ImportStats) -> None:
+    """Refresh percentile fields from the current histogram."""
+    percentile_values = compute_quality_percentiles(stats.quality_buckets)
+    stats.quality_p50 = percentile_values[50]
+    stats.quality_p75 = percentile_values[75]
+    stats.quality_p90 = percentile_values[90]
+    stats.quality_p95 = percentile_values[95]
+
+
+def calculate_quality_average(stats: ImportStats) -> float | None:
+    """Return mean quality score or None when no observations exist."""
+    if stats.quality_observations == 0:
+        return None
+    return stats.quality_score_sum / stats.quality_observations
+
+
+def format_quality_histogram(bucket_counts: Sequence[int]) -> str:
+    """Format quality histogram as compact bucket summary text."""
+    if len(bucket_counts) != QUALITY_BUCKET_COUNT:
+        raise ValueError(
+            f"bucket_counts must have {QUALITY_BUCKET_COUNT} buckets "
+            f"(got {len(bucket_counts)})"
+        )
+
+    total_samples = sum(bucket_counts)
+    if total_samples == 0:
+        return "no samples"
+
+    parts = []
+    for bucket_index, count in enumerate(bucket_counts):
+        percentage = (count / total_samples) * 100
+        label = get_quality_bucket_label(bucket_index)
+        parts.append(f"{label}:{count} ({percentage:.1f}%)")
+
+    return " | ".join(parts)
+
+
+def build_threshold_guidance(
+    stats: ImportStats,
+    quality_threshold: float,
+    min_sample_size: int = 50,
+) -> ThresholdGuidance:
+    """Build threshold guidance scaffolding from observed score distribution."""
+    validate_quality_threshold(quality_threshold)
+    if min_sample_size <= 0:
+        raise ValueError(f"min_sample_size must be > 0 (got {min_sample_size})")
+
+    refresh_quality_percentiles(stats)
+
+    if stats.quality_observations < min_sample_size:
+        return ThresholdGuidance(
+            current_threshold=quality_threshold,
+            suggested_threshold=None,
+            confidence="low",
+            rationale=(
+                "Insufficient scored candidates for recommendation "
+                f"({stats.quality_observations}/{min_sample_size})."
+            ),
+        )
+
+    reject_rate = (
+        stats.rejected_candidates / stats.quality_observations
+        if stats.quality_observations
+        else 0.0
+    )
+
+    suggested_threshold = quality_threshold
+    rationale = "Threshold appears balanced; keep current setting."
+
+    if reject_rate > 0.80 and stats.quality_p50 is not None:
+        suggested_threshold = round(stats.quality_p50, 2)
+        rationale = "High reject rate observed; consider lowering threshold toward p50."
+    elif reject_rate < 0.05 and stats.quality_p90 is not None:
+        suggested_threshold = round(stats.quality_p90, 2)
+        rationale = (
+            "Very low reject rate observed; consider raising threshold toward p90."
+        )
+
+    return ThresholdGuidance(
+        current_threshold=quality_threshold,
+        suggested_threshold=suggested_threshold,
+        confidence="medium",
+        rationale=rationale,
+    )
 
 
 def clean_irc_formatting(text: str) -> str:
@@ -116,9 +470,7 @@ def calculate_quality_score(key: str, value: str) -> float:
         score += 0.2
 
     # Penalize excessive special characters
-    special_chars = sum(
-        1 for c in value if not c.isalnum() and c not in " .,!?-"
-    )
+    special_chars = sum(1 for c in value if not c.isalnum() and c not in " .,!?-")
     special_char_ratio = special_chars / max(len(value), 1)
     if special_char_ratio > 0.3:
         score -= 0.2
@@ -202,6 +554,9 @@ async def import_factoid_file(
     factoid_type: FactoidType,
     store: FactoidStore,
     quality_threshold: float = 0.3,
+    stats: ImportStats | None = None,
+    sample_cap: int | None = None,
+    rng: random.Random | None = None,
 ) -> ImportStats:
     """Import a legacy factoid file into the database.
 
@@ -210,13 +565,19 @@ async def import_factoid_file(
         factoid_type: Type of factoids (IS or ARE).
         store: FactoidStore instance for database operations.
         quality_threshold: Minimum quality score to import (0.0-1.0).
+        stats: Optional stats accumulator.
+        sample_cap: Optional reservoir sample cap override.
+        rng: Optional deterministic RNG for sampling.
 
     Returns:
         ImportStats with import statistics.
     """
     validate_quality_threshold(quality_threshold)
+    resolved_sample_cap = resolve_legacy_import_sample_cap(sample_cap)
+    quality_rng = rng if rng is not None else build_quality_rng()
 
-    stats = ImportStats()
+    if stats is None:
+        stats = ImportStats()
     logger.info(f"Importing {factoid_type.value} factoids from {file_path}")
 
     if not file_path.exists():
@@ -249,7 +610,29 @@ async def import_factoid_file(
 
                 # Calculate quality score
                 quality_score = calculate_quality_score(key, value)
-                if quality_score < quality_threshold:
+                is_accepted = quality_score >= quality_threshold
+
+                update_quality_aggregates(
+                    stats=stats,
+                    quality_score=quality_score,
+                    accepted=is_accepted,
+                )
+                quality_sample = build_quality_sample(
+                    source_file=file_path.name,
+                    line_number=line_num,
+                    key=key,
+                    value=value,
+                    quality_score=quality_score,
+                )
+                record_quality_sample(
+                    stats=stats,
+                    sample=quality_sample,
+                    accepted=is_accepted,
+                    sample_cap=resolved_sample_cap,
+                    rng=quality_rng,
+                )
+
+                if not is_accepted:
                     stats.skipped_low_quality += 1
                     logger.debug(
                         f"Low quality factoid (score={quality_score:.2f}): {key[:50]}"
@@ -286,6 +669,7 @@ async def import_factoid_file(
         logger.error(f"Failed to read file {file_path}: {e}")
         stats.errors += 1
 
+    refresh_quality_percentiles(stats)
     return stats
 
 
@@ -307,10 +691,14 @@ async def import_legacy_data(
         Combined ImportStats for all files.
     """
     validate_quality_threshold(quality_threshold)
+    sample_cap = resolve_legacy_import_sample_cap()
+    quality_rng = build_quality_rng()
 
     logger.info(f"Starting legacy import from {source_dir}")
     logger.info(f"Database: {db_path}")
     logger.info(f"Quality threshold: {quality_threshold}")
+    logger.info(f"Quality sample cap: {sample_cap}")
+    logger.info(f"Quality RNG seed: {resolve_legacy_import_rng_seed()}")
 
     # Find factoid files
     if botname:
@@ -344,7 +732,12 @@ async def import_legacy_data(
     try:
         if is_file and is_file.exists():
             is_stats = await import_factoid_file(
-                is_file, FactoidType.IS, store, quality_threshold
+                is_file,
+                FactoidType.IS,
+                store,
+                quality_threshold=quality_threshold,
+                sample_cap=sample_cap,
+                rng=quality_rng,
             )
             total_stats.total_lines += is_stats.total_lines
             total_stats.parsed += is_stats.parsed
@@ -356,7 +749,12 @@ async def import_legacy_data(
 
         if are_file and are_file.exists():
             are_stats = await import_factoid_file(
-                are_file, FactoidType.ARE, store, quality_threshold
+                are_file,
+                FactoidType.ARE,
+                store,
+                quality_threshold=quality_threshold,
+                sample_cap=sample_cap,
+                rng=quality_rng,
             )
             total_stats.total_lines += are_stats.total_lines
             total_stats.parsed += are_stats.parsed
@@ -414,6 +812,8 @@ def main() -> None:
 
     try:
         validate_quality_threshold(args.quality_threshold)
+        resolve_legacy_import_sample_cap()
+        resolve_legacy_import_rng_seed()
     except ValueError as e:
         parser.error(str(e))
 
