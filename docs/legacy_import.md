@@ -72,18 +72,19 @@ Up to 3 sampled previews are shown per accepted/rejected section per snapshot.
 
 ## Final Summary Output
 
-At completion, the CLI summary includes:
+At completion, the CLI summary includes core counts only:
 
-- core counts (`parsed`, `imported`, `duplicates`, `errors`, etc.)
-- scored/accepted/rejected candidate counts
-- reject rate
-- score min/avg/max
-- percentiles (`p50/p75/p90/p95`)
-- full histogram line
-- full 10-bucket count/percentage breakdown
-- accepted sample previews
-- rejected sample previews
-- threshold guidance block
+- total lines processed
+- successfully parsed
+- skipped (invalid format)
+- skipped (low quality)
+- duplicates
+- errors
+- successfully imported
+
+Telemetry details (percentiles, histograms, sample previews, guidance) are
+available in `ImportStats` when using `import_legacy_data()` programmatically
+and in periodic diagnostics logs during import.
 
 ## Threshold Guidance Semantics
 
