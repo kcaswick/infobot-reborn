@@ -19,6 +19,7 @@ from infobot.nlu import (
     detect_factoid_create_intent,
     parse_question,
 )
+from infobot.prompts import build_main_prompt
 from infobot.services.llm_service import (
     ChatMessage,
     LlmRequest,
@@ -243,7 +244,7 @@ class MessageHandler:
     ) -> str | None:
         """Optionally enhance a factoid response with LLM context.
 
-        This is a Phase 1 stub - enhancement logic can be added later.
+        Uses the main Infobot prompt to keep LLM responses on-brand.
 
         Args:
             base_response: The base formatted response from the factoid.
@@ -259,7 +260,7 @@ class MessageHandler:
         try:
             request = LlmRequest(
                 messages=[
-                    ChatMessage(role="system", content="You are a helpful bot."),
+                    ChatMessage(role="system", content=build_main_prompt()),
                     ChatMessage(
                         role="user",
                         content=(
