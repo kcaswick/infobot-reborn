@@ -6,7 +6,7 @@ import random
 import re
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Protocol, Sequence
 
 
 _REPLY_RE = re.compile(r"<reply>(?P<content>.*?)</reply>", re.IGNORECASE | re.DOTALL)
@@ -21,10 +21,17 @@ class FormatContext:
     now: datetime
 
 
+class SupportsChoice(Protocol):
+    """Minimal RNG protocol for selecting a random variant."""
+
+    def choice(self, seq: Sequence[str]) -> str:
+        """Pick one element from a non-empty sequence."""
+
+
 def format_response(
     template: str,
     context: FormatContext,
-    rng: Optional[random.Random] = None,
+    rng: Optional[SupportsChoice] = None,
 ) -> str:
     """Format a response template into a message.
 
@@ -48,7 +55,7 @@ def format_response(
     return rendered
 
 
-def _select_variant(template: str, rng: random.Random) -> str:
+def _select_variant(template: str, rng: SupportsChoice) -> str:
     if "|" not in template:
         return template
 
