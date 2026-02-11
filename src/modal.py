@@ -10,10 +10,12 @@ Deploys the Discord bot using Discord Interactions API (HTTP webhooks) with:
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from enum import Enum
 import json
 import logging
 import os
-from enum import Enum
+from pathlib import Path
 
 import modal
 
@@ -67,7 +69,7 @@ discord_secret = modal.Secret.from_name(
 )
 
 
-def authenticate(headers: dict, body: bytes) -> None:
+def authenticate(headers: Mapping[str, str], body: bytes) -> None:
     """Verify Discord request signature using Ed25519.
 
     Args:
@@ -87,8 +89,9 @@ def authenticate(headers: dict, body: bytes) -> None:
 
     verify_key = VerifyKey(bytes.fromhex(public_key))
 
-    signature = headers.get("X-Signature-Ed25519")
-    timestamp = headers.get("X-Signature-Timestamp")
+    normalized_headers = {key.lower(): value for key, value in headers.items()}
+    signature = normalized_headers.get("x-signature-ed25519")
+    timestamp = normalized_headers.get("x-signature-timestamp")
 
     if not signature or not timestamp:
         raise HTTPException(status_code=401, detail="Missing signature headers")
@@ -160,19 +163,20 @@ async def process_and_reply(
     os.environ["DATABASE_PATH"] = "/data/infobot.db"
     os.environ["LOG_LEVEL"] = log_level
 
-    from infobot.config import Config
     from infobot.db import DatabaseConnection, initialize_schema
     from infobot.message_handler import MessageHandler
     from infobot.services.llm_service import LlmService
 
+    db: DatabaseConnection | None = None
+
     try:
         # Initialize services
-        config = Config.from_env()
-        db = DatabaseConnection(config.database_path)
+        db_path = Path(os.getenv("DATABASE_PATH", "/data/infobot.db"))
+        db = DatabaseConnection(db_path)
         await db.connect()
         await initialize_schema(db)
 
-        llm_service = LlmService.from_config(config)
+        llm_service = LlmService(model=llm_model, base_url=llm_base_url)
         message_handler = MessageHandler(db, llm_service)
 
         # Process message
@@ -196,7 +200,8 @@ async def process_and_reply(
             interaction_token,
         )
     finally:
-        await db.close()
+        if db is not None:
+            await db.close()
 
 
 @app.function(
@@ -211,18 +216,8 @@ def web_app():
         FastAPI app configured for Discord webhooks.
     """
     from fastapi import FastAPI, HTTPException, Request
-    from fastapi.middleware.cors import CORSMiddleware
 
     web_app = FastAPI(title="Infobot Reborn Discord Bot")
-
-    # CORS middleware
-    web_app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
 
     @web_app.post("/interactions")
     async def handle_interaction(request: Request):
@@ -235,7 +230,7 @@ def web_app():
             JSON response for Discord.
         """
         body = await request.body()
-        authenticate(dict(request.headers), body)
+        authenticate(request.headers, body)
 
         data = json.loads(body.decode())
         interaction_type = data.get("type")

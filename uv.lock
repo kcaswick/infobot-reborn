@@ -1017,6 +1017,7 @@ name = "infobot-reborn"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "aiohttp" },
     { name = "aiosqlite" },
     { name = "discord-py" },
     { name = "fastapi", extra = ["standard"] },
@@ -1024,6 +1025,7 @@ dependencies = [
     { name = "openai" },
     { name = "pynacl" },
     { name = "python-dotenv" },
+    { name = "requests" },
 ]
 
 [package.dev-dependencies]
@@ -1039,6 +1041,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aiohttp", specifier = ">=3.9.0,<4.0.0" },
     { name = "aiosqlite", specifier = ">=0.20.0" },
     { name = "discord-py", specifier = ">=2.3.0" },
     { name = "fastapi", extras = ["standard"], specifier = ">=0.115.0" },
@@ -1046,6 +1049,7 @@ requires-dist = [
     { name = "openai", specifier = ">=1.0.0" },
     { name = "pynacl", specifier = ">=1.5.0" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
+    { name = "requests", specifier = ">=2.31.0,<3.0.0" },
 ]
 
 [package.metadata.requires-dev]
