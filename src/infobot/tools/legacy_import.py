@@ -498,6 +498,96 @@ def build_threshold_guidance(
     )
 
 
+def _format_optional_score(value: float | None) -> str:
+    """Format an optional score for summary output."""
+    if value is None:
+        return "n/a"
+    return f"{value:.2f}"
+
+
+def render_import_summary(
+    stats: ImportStats,
+    quality_threshold: float,
+    guidance_min_sample_size: int = 50,
+) -> list[str]:
+    """Render complete import summary lines for CLI output."""
+    validate_quality_threshold(quality_threshold)
+    guidance = build_threshold_guidance(
+        stats=stats,
+        quality_threshold=quality_threshold,
+        min_sample_size=guidance_min_sample_size,
+    )
+    quality_average = calculate_quality_average(stats)
+    reject_rate = (
+        stats.rejected_candidates / stats.quality_observations
+        if stats.quality_observations
+        else 0.0
+    )
+
+    lines = [
+        "IMPORT SUMMARY",
+        "=" * 60,
+        f"Total lines processed:    {stats.total_lines}",
+        f"Successfully parsed:      {stats.parsed}",
+        f"Skipped (invalid format): {stats.skipped_invalid}",
+        f"Skipped (low quality):    {stats.skipped_low_quality}",
+        f"Duplicates:               {stats.duplicates}",
+        f"Errors:                   {stats.errors}",
+        f"Successfully imported:    {stats.imported}",
+        "=" * 60,
+        "QUALITY METRICS",
+        "-" * 60,
+        f"Scored candidates:        {stats.quality_observations}",
+        f"Accepted candidates:      {stats.accepted_candidates}",
+        f"Rejected candidates:      {stats.rejected_candidates}",
+        f"Reject rate:              {reject_rate * 100:.1f}%",
+        (
+            "Score range/avg:          "
+            f"min={_format_optional_score(stats.quality_min)} "
+            f"avg={_format_optional_score(quality_average)} "
+            f"max={_format_optional_score(stats.quality_max)}"
+        ),
+        (
+            "Percentiles:              "
+            f"p50={_format_optional_score(stats.quality_p50)} "
+            f"p75={_format_optional_score(stats.quality_p75)} "
+            f"p90={_format_optional_score(stats.quality_p90)} "
+            f"p95={_format_optional_score(stats.quality_p95)}"
+        ),
+        "Histogram:                " + format_quality_histogram(stats.quality_buckets),
+        "Bucket distribution:",
+    ]
+
+    total_observations = stats.quality_observations
+    for bucket_index, count in enumerate(stats.quality_buckets):
+        bucket_label = get_quality_bucket_label(bucket_index)
+        percentage = (count / total_observations * 100) if total_observations else 0.0
+        lines.append(f"  {bucket_label}: {count} ({percentage:.1f}%)")
+
+    lines.extend(
+        [
+            "Accepted samples:         "
+            + format_quality_sample_previews(stats.accepted_samples),
+            "Rejected samples:         "
+            + format_quality_sample_previews(stats.rejected_samples),
+            "Threshold guidance:",
+            (
+                f"  Current threshold={guidance.current_threshold:.2f} "
+                f"Suggested={_format_optional_score(guidance.suggested_threshold)} "
+                f"Confidence={guidance.confidence}"
+            ),
+            f"  Rationale: {guidance.rationale}",
+        ]
+    )
+
+    if guidance.confidence == "low":
+        lines.append(
+            "  Guardrail: recommendation withheld until sample size is sufficient."
+        )
+
+    return lines
+
+
 def clean_irc_formatting(text: str) -> str:
     """Convert IRC formatting codes to Markdown and remove control characters.
 
@@ -870,38 +960,26 @@ async def import_legacy_data(
 
     try:
         if is_file and is_file.exists():
-            is_stats = await import_factoid_file(
+            await import_factoid_file(
                 is_file,
                 FactoidType.IS,
                 store,
                 quality_threshold=quality_threshold,
+                stats=total_stats,
                 sample_cap=sample_cap,
                 rng=quality_rng,
             )
-            total_stats.total_lines += is_stats.total_lines
-            total_stats.parsed += is_stats.parsed
-            total_stats.skipped_invalid += is_stats.skipped_invalid
-            total_stats.skipped_low_quality += is_stats.skipped_low_quality
-            total_stats.imported += is_stats.imported
-            total_stats.duplicates += is_stats.duplicates
-            total_stats.errors += is_stats.errors
 
         if are_file and are_file.exists():
-            are_stats = await import_factoid_file(
+            await import_factoid_file(
                 are_file,
                 FactoidType.ARE,
                 store,
                 quality_threshold=quality_threshold,
+                stats=total_stats,
                 sample_cap=sample_cap,
                 rng=quality_rng,
             )
-            total_stats.total_lines += are_stats.total_lines
-            total_stats.parsed += are_stats.parsed
-            total_stats.skipped_invalid += are_stats.skipped_invalid
-            total_stats.skipped_low_quality += are_stats.skipped_low_quality
-            total_stats.imported += are_stats.imported
-            total_stats.duplicates += are_stats.duplicates
-            total_stats.errors += are_stats.errors
 
     finally:
         await conn.close()
@@ -967,17 +1045,9 @@ def main() -> None:
     )
 
     # Print summary
-    print("\n" + "=" * 60)
-    print("IMPORT SUMMARY")
-    print("=" * 60)
-    print(f"Total lines processed:    {stats.total_lines}")
-    print(f"Successfully parsed:      {stats.parsed}")
-    print(f"Skipped (invalid format): {stats.skipped_invalid}")
-    print(f"Skipped (low quality):    {stats.skipped_low_quality}")
-    print(f"Duplicates:               {stats.duplicates}")
-    print(f"Errors:                   {stats.errors}")
-    print(f"Successfully imported:    {stats.imported}")
-    print("=" * 60)
+    print()
+    for line in render_import_summary(stats, args.quality_threshold):
+        print(line)
 
     if stats.imported > 0:
         print(f"\n✓ Import complete! {stats.imported} factoids imported.")

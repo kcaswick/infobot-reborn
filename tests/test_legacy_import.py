@@ -31,6 +31,7 @@ from infobot.tools.legacy_import import (
     parse_factoid_line,
     record_quality_sample,
     refresh_quality_percentiles,
+    render_import_summary,
     resolve_legacy_import_rng_seed,
     resolve_legacy_import_sample_cap,
     should_emit_quality_diagnostics,
@@ -237,6 +238,38 @@ async def test_import_legacy_data_specific_botname(tmp_path: Path, db_conn):
     )
 
     assert stats.imported >= 2
+
+
+@pytest.mark.asyncio
+async def test_import_legacy_data_uses_shared_quality_stats(tmp_path: Path, db_conn):
+    """IS/ARE imports should accumulate into one shared telemetry snapshot."""
+    (tmp_path / "shared-is.txt").write_text(
+        "alpha => first value with enough length\n"
+        "beta => second value with enough length\n"
+    )
+    (tmp_path / "shared-are.txt").write_text(
+        "gamma => third value with enough length\n"
+        "delta => fourth value with enough length\n"
+    )
+
+    db_path = Path(db_conn.db_path)
+
+    stats = await import_legacy_data(
+        source_dir=tmp_path,
+        db_path=db_path,
+        botname="shared",
+        quality_threshold=0.0,
+    )
+
+    assert stats.parsed == 4
+    assert stats.quality_observations == 4
+    assert stats.accepted_candidates == 4
+    assert stats.rejected_candidates == 0
+    assert sum(stats.quality_buckets) == stats.quality_observations
+    assert stats.quality_p50 is not None
+    assert stats.quality_p95 is not None
+    source_files = {sample.source_file for sample in stats.accepted_samples}
+    assert source_files == {"shared-is.txt", "shared-are.txt"}
 
 
 @pytest.mark.asyncio
@@ -566,6 +599,64 @@ def test_build_threshold_guidance_high_reject_rate() -> None:
     assert guidance.confidence == "medium"
     assert guidance.suggested_threshold is not None
     assert guidance.suggested_threshold <= 0.8
+
+
+def test_render_import_summary_includes_quality_sections_and_guardrail() -> None:
+    """Summary output should include quality sections and low-confidence guardrail."""
+    stats = ImportStats(
+        total_lines=6,
+        parsed=4,
+        skipped_invalid=2,
+        skipped_low_quality=1,
+        imported=3,
+        duplicates=0,
+        errors=0,
+        quality_observations=4,
+        quality_score_sum=2.4,
+        quality_min=0.2,
+        quality_max=0.9,
+        quality_buckets=[1, 0, 1, 0, 1, 1, 0, 0, 0, 0],
+        accepted_candidates=3,
+        rejected_candidates=1,
+        accepted_samples=[
+            QualitySample(
+                source_file="facts-is.txt",
+                line_number=1,
+                key="alpha",
+                value_preview="first",
+                score=0.8,
+            )
+        ],
+        rejected_samples=[
+            QualitySample(
+                source_file="facts-are.txt",
+                line_number=2,
+                key="beta",
+                value_preview="second",
+                score=0.2,
+            )
+        ],
+    )
+    refresh_quality_percentiles(stats)
+
+    lines = render_import_summary(
+        stats=stats,
+        quality_threshold=0.3,
+        guidance_min_sample_size=50,
+    )
+
+    rendered = "\n".join(lines)
+    assert "IMPORT SUMMARY" in rendered
+    assert "QUALITY METRICS" in rendered
+    assert "Percentiles:" in rendered
+    assert "Histogram:" in rendered
+    assert "Bucket distribution:" in rendered
+    assert "0.0-0.1:" in rendered
+    assert "0.9-1.0:" in rendered
+    assert "Accepted samples:" in rendered
+    assert "Rejected samples:" in rendered
+    assert "Threshold guidance:" in rendered
+    assert "Guardrail: recommendation withheld" in rendered
 
 
 @pytest.mark.asyncio
