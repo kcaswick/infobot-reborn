@@ -23,6 +23,7 @@ from infobot.tools.legacy_import import (
     clean_irc_formatting,
     compute_quality_percentiles,
     configure_import_logging,
+    emit_quality_diagnostics,
     format_quality_histogram,
     format_quality_sample_previews,
     get_quality_bucket_index,
@@ -422,6 +423,7 @@ def test_update_quality_aggregates_tracks_counts() -> None:
     update_quality_aggregates(stats, quality_score=0.8, accepted=True)
 
     assert stats.quality_observations == 2
+    assert stats.quality_score_sum == pytest.approx(1.0)
     assert stats.accepted_candidates == 1
     assert stats.rejected_candidates == 1
     assert stats.quality_min == 0.2
@@ -567,6 +569,61 @@ def test_format_quality_sample_previews() -> None:
     assert rendered.startswith("alpha@1")
     assert "score=0.90" in rendered
     assert format_quality_sample_previews([]) == "none"
+
+
+def test_emit_quality_diagnostics_logs_expected_fields(caplog) -> None:
+    """Diagnostics logging should include histogram and sample previews."""
+    stats = ImportStats(
+        parsed=4,
+        imported=2,
+        quality_observations=4,
+        quality_score_sum=2.0,
+        quality_min=0.1,
+        quality_max=0.9,
+        quality_buckets=[1, 0, 1, 0, 1, 1, 0, 0, 0, 0],
+        accepted_candidates=3,
+        rejected_candidates=1,
+        accepted_samples=[
+            QualitySample(
+                source_file="facts-is.txt",
+                line_number=1,
+                key="alpha",
+                value_preview="first",
+                score=0.8,
+            )
+        ],
+        rejected_samples=[
+            QualitySample(
+                source_file="facts-is.txt",
+                line_number=2,
+                key="beta",
+                value_preview="second",
+                score=0.2,
+            )
+        ],
+    )
+
+    module_logger = logging.getLogger("infobot.tools.legacy_import")
+    module_logger.addHandler(caplog.handler)
+    try:
+        with caplog.at_level(logging.INFO, logger="infobot.tools.legacy_import"):
+            emit_quality_diagnostics(
+                stats=stats,
+                file_path=Path("facts-is.txt"),
+                factoid_type=FactoidType.IS,
+                quality_threshold=0.3,
+            )
+    finally:
+        module_logger.removeHandler(caplog.handler)
+
+    log_text = caplog.text
+    assert "Quality diagnostics [is/facts-is.txt]" in log_text
+    assert "reject_rate=25.0%" in log_text
+    assert "hist=0.0-0.1:1" in log_text
+    assert "Accepted sample previews [is/facts-is.txt]" in log_text
+    assert "alpha@1" in log_text
+    assert "Rejected sample previews [is/facts-is.txt]" in log_text
+    assert "beta@2" in log_text
 
 
 def test_build_threshold_guidance_low_confidence() -> None:
