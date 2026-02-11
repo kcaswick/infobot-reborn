@@ -42,6 +42,16 @@ uv sync
 # uv sync --group dev
 ```
 
+### Configuration
+
+Copy `.env.example` to `.env` and set required values:
+
+- `DISCORD_BOT_TOKEN` is required to run the local Discord bot and to register
+  slash commands in Modal (`modal run src/modal.py::register_commands`).
+- `DISCORD_CLIENT_ID` and `DISCORD_PUBLIC_KEY` are required for Modal deployments
+  (webhook verification + command registration).
+- Optional: `LLM_BASE_URL`, `LLM_MODEL`, `DATABASE_PATH`, `LOG_LEVEL`.
+
 ### Running Locally
 
 ```bash
