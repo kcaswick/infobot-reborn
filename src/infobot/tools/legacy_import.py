@@ -31,7 +31,7 @@ QUALITY_PERCENTILES = (50, 75, 90, 95)
 DEFAULT_LEGACY_IMPORT_SAMPLE_CAP = 20
 DEFAULT_LEGACY_IMPORT_RNG_SEED = 1337
 DEFAULT_QUALITY_SAMPLE_PREVIEW_CHARS = 96
-DEFAULT_DIAGNOSTIC_PARSED_INTERVAL = 500
+DEFAULT_DIAGNOSTIC_PARSED_INTERVAL = 1000
 DEFAULT_DIAGNOSTIC_SECONDS_INTERVAL = 30.0
 DEFAULT_DIAGNOSTIC_SAMPLE_PREVIEW_LIMIT = 3
 
@@ -505,6 +505,66 @@ def _format_optional_score(value: float | None) -> str:
     return f"{value:.2f}"
 
 
+def render_sample_table(
+    accepted_samples: Sequence[QualitySample],
+    rejected_samples: Sequence[QualitySample],
+    key_width: int = 45,
+    value_width: int = 60,
+) -> list[str]:
+    """Render accepted/rejected samples as a markdown table sorted by score.
+
+    Args:
+        accepted_samples: Accepted sample records.
+        rejected_samples: Rejected sample records.
+        key_width: Column width for key.
+        value_width: Column width for value.
+
+    Returns:
+        Lines of markdown table.
+    """
+    # Combine samples with status
+    all_samples = [
+        ("Accepted", sample) for sample in accepted_samples
+    ] + [("Rejected", sample) for sample in rejected_samples]
+
+    # Sort by score descending, then by key for stability
+    all_samples.sort(
+        key=lambda x: (-x[1].score, x[1].source_file, x[1].line_number, x[1].key)
+    )
+
+    # Remove duplicates (keep first occurrence)
+    seen = set()
+    unique_samples = []
+    for status, sample in all_samples:
+        key = (sample.key, sample.score, sample.value_preview)
+        if key not in seen:
+            seen.add(key)
+            unique_samples.append((status, sample))
+
+    if not unique_samples:
+        return []
+
+    lines = [
+        f"| {'STATUS':<8} | {'KEY':<{key_width}} | {'SCORE':<6} | VALUE",
+        f"|{'-' * 10}|{'-' * (key_width + 2)}|{'-' * 8}|{'-' * (value_width + 2)}",
+    ]
+
+    for status, sample in unique_samples:
+        key_trunc = (
+            sample.key[:key_width] if len(sample.key) > key_width else sample.key
+        )
+        value_trunc = (
+            sample.value_preview[:value_width]
+            if len(sample.value_preview) > value_width
+            else sample.value_preview
+        )
+        lines.append(
+            f"| {status:<8} | {key_trunc:<{key_width}} | {sample.score:<6.2f} | {value_trunc}"
+        )
+
+    return lines
+
+
 def render_import_summary(
     stats: ImportStats,
     quality_threshold: float,
@@ -524,7 +584,17 @@ def render_import_summary(
         else 0.0
     )
 
-    lines = [
+    lines = []
+
+    # Add sample table if samples exist
+    sample_table = render_sample_table(
+        accepted_samples=stats.accepted_samples,
+        rejected_samples=stats.rejected_samples,
+    )
+    if sample_table:
+        lines.extend(["QUALITY SAMPLES (sorted by score)", ""] + sample_table + [""])
+
+    lines.extend([
         "IMPORT SUMMARY",
         "=" * 60,
         f"Total lines processed:    {stats.total_lines}",
@@ -554,9 +624,8 @@ def render_import_summary(
             f"p90={_format_optional_score(stats.quality_p90)} "
             f"p95={_format_optional_score(stats.quality_p95)}"
         ),
-        "Histogram:                " + format_quality_histogram(stats.quality_buckets),
-        "Bucket distribution:",
-    ]
+        "Histogram:                ",
+    ])
 
     total_observations = stats.quality_observations
     for bucket_index, count in enumerate(stats.quality_buckets):
@@ -627,36 +696,118 @@ def calculate_quality_score(key: str, value: str) -> float:
         Quality score between 0.0 and 1.0.
     """
     score = 0.5  # Start at neutral
+    key_has_conversational_signal = False
 
-    # Penalize very short content
-    if len(value) < 3:
-        score -= 0.4
-    elif len(value) < 10:
-        score -= 0.2
-
-    # Penalize very long content (likely conversational noise)
-    if len(value) > 500:
-        score -= 0.3
-    elif len(value) > 200:
-        score -= 0.1
-
-    # Reward reasonable content length
-    if 10 <= len(value) <= 200:
-        score += 0.2
+    # --- Key quality signals ---
 
     # Penalize keys that look like sentence fragments
-    if key.count(" ") > 10:
+    key_words = key.count(" ") + 1
+    key_lower = key.lower()
+
+    # Graduated penalty for wordy keys
+    if key_words > 10:
         score -= 0.3
+    elif key_words > 6:
+        score -= 0.2
+    elif key_words > 4:
+        score -= 0.1
 
     # Penalize keys that end with punctuation (likely fragments)
     if key.rstrip().endswith(("?", "!", ".", ",")):
         score -= 0.2
+        key_has_conversational_signal = True
+
+    # Keys starting with interjections/filler
+    if re.search(
+        r"^(ack|ah|oh|hmm|hrm|hm|huh|hey|well|ugh|wow|yay|yeh|yeah|idk)\b",
+        key_lower,
+    ):
+        score -= 0.2
+        key_has_conversational_signal = True
+
+    # Keys starting with first-person pronouns (personal narrative)
+    if re.search(
+        r"^(i\s|i'm|i'd|i'll|i've|you're)\b",
+        key_lower,
+    ):
+        score -= 0.15
+        key_has_conversational_signal = True
+
+    # Keys starting with conjunctions/prepositions/adverbs (mid-sentence capture)
+    if re.search(
+        r"^(as|but|and|or|so|if|when|because|since|though|although"
+        r"|while|after|before|until|from|like|maybe|only|just"
+        r"|now|then|see|somehow)\b",
+        key_lower,
+    ):
+        score -= 0.15
+        key_has_conversational_signal = True
+
+    # Commas in keys — graduated
+    comma_count = key.count(",")
+    if comma_count >= 2:
+        score -= 0.25
+        key_has_conversational_signal = True
+    elif comma_count == 1:
+        score -= 0.15
+        key_has_conversational_signal = True
+
+    # Ellipsis in keys (narrative/trailing thought)
+    if "..." in key:
+        score -= 0.15
+        key_has_conversational_signal = True
+
+    # Text emoticons in keys (o.o, O_O, x_x, etc.)
+    if re.search(r"[oOxX0][._][oOxX0]|>_<|\^_\^", key):
+        score -= 0.2
+        key_has_conversational_signal = True
+
+    # Conversational phrases in keys
+    if re.search(
+        r"\b(let me|let's|ask you|tell you|you know|i think|i thought"
+        r"|issue|problem|thing|see that|working)\b",
+        key_lower,
+    ):
+        score -= 0.2
+        key_has_conversational_signal = True
+
+    # Addressing someone
+    if re.search(r"\b(bub|dude|man|mate|pal|buddy)\b", key_lower):
+        score -= 0.2
+        key_has_conversational_signal = True
+
+    # Concise key bonus — short clean topic names are intentional
+    if key_words <= 2 and not key_has_conversational_signal:
+        score += 0.1
+
+    # --- Value quality signals ---
+
+    # Value length (reduced base reward)
+    if len(value) < 3:
+        score -= 0.35
+    elif len(value) < 10:
+        score -= 0.05  # Softened: short answers to clean keys are valid
+    elif len(value) > 500:
+        score -= 0.3
+    elif len(value) > 200:
+        score -= 0.1
+    elif 10 <= len(value) <= 200:
+        score += 0.1
+
+    # Intentional factoid markers (HIGH value)
+    if re.search(r"<(response|reply|action)>", value.lower()):
+        score += 0.3
 
     # Penalize values that start with conversational patterns
     conversational_patterns = [
         r"^(yeah|yep|nope|nah|ok|okay|sure|whatever)\b",
-        r"^(lol|haha|heh|rofl|lmao)\b",
-        r"^(hmm|umm|uh|er)\b",
+        r"^(lol|haha|hehe?|rofl|lmao)\b",                         # laughter
+        r"^(hmm|umm|uh|er|hrm|huh)\b",
+        r"^(back|here|gone|away|around|busy|afk|brb)\b",        # IRC status
+        r"^(not sure|no idea|dunno|idk|iirc)\b",                # uncertainty
+        r"^(shy|afraid|sorry|glad|happy|sad)\s+to\b",           # emotional state
+        r"^(really|actually|basically|literally)\s+\w+ing\b",   # intensifier + gerund
+        r"\b(i'm|i am)\s+\w+ing\b",                             # first-person action
     ]
     for pattern in conversational_patterns:
         if re.search(pattern, value.lower()):
@@ -666,6 +817,10 @@ def calculate_quality_score(key: str, value: str) -> float:
     # Reward URLs (likely useful references)
     if "http://" in value or "https://" in value:
         score += 0.2
+
+    # Emoticons
+    if re.search(r"[:;]['\-]?[)(DPpO/\\|]", value):
+        score -= 0.1
 
     # Penalize excessive special characters
     special_chars = sum(1 for c in value if not c.isalnum() and c not in " .,!?-")
@@ -879,7 +1034,7 @@ async def import_factoid_file(
                     await store.create(factoid)
                     stats.imported += 1
 
-                    if stats.imported % 100 == 0:
+                    if stats.imported <= 2000 and stats.imported % 100 == 0 or stats.imported % 1000 == 0 :
                         logger.info(f"Imported {stats.imported} factoids so far...")
 
                 except FactoidExistsError:
@@ -1012,8 +1167,8 @@ def main() -> None:
     parser.add_argument(
         "--quality-threshold",
         type=float,
-        default=0.3,
-        help="Minimum quality score to import (0.0-1.0, default: 0.3)",
+        default=0.55,
+        help="Minimum quality score to import (0.0-1.0, default: 0.55)",
     )
     parser.add_argument(
         "--verbose",
