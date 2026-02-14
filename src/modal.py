@@ -13,12 +13,18 @@ from __future__ import annotations
 import json
 import logging
 import os
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+from fastapi import Request
 
 import modal
+
+if TYPE_CHECKING:
+    from infobot.services.llm_service import LlmService
 
 
 # Discord Interactions API protocol types
@@ -130,6 +136,45 @@ def resolve_runtime_config(env: Mapping[str, str] | None = None) -> RuntimeConfi
     )
 
 
+def _configure_logging(log_level: str) -> None:
+    """Apply process logging configuration for worker execution."""
+    logging.basicConfig(
+        level=getattr(logging, log_level.upper(), logging.INFO),
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    )
+
+
+def _build_llm_service(llm_base_url: str, llm_model: str) -> LlmService:
+    """Construct an LLM service instance for a specific runtime config."""
+    from infobot.services.llm_service import LlmService
+
+    return LlmService(model=llm_model, base_url=llm_base_url)
+
+
+class RuntimeServiceCache:
+    """Container-scoped cache for reusable runtime services.
+
+    This cache is intentionally limited to stateless or safely reusable objects.
+    Request-scoped DB handles remain per-request.
+    """
+
+    def __init__(
+        self,
+        llm_factory: Callable[[str, str], LlmService] | None = None,
+    ) -> None:
+        self._llm_factory = llm_factory or _build_llm_service
+        self._llm_services: dict[tuple[str, str], LlmService] = {}
+
+    def get_llm_service(self, llm_base_url: str, llm_model: str) -> LlmService:
+        """Get or create a cached LLM service for a runtime tuple."""
+        key = (llm_base_url, llm_model)
+        service = self._llm_services.get(key)
+        if service is None:
+            service = self._llm_factory(llm_base_url, llm_model)
+            self._llm_services[key] = service
+        return service
+
+
 def authenticate(headers: Mapping[str, str], body: bytes) -> None:
     """Verify Discord request signature using Ed25519.
 
@@ -188,82 +233,96 @@ async def send_to_discord(payload: dict, app_id: str, interaction_token: str) ->
                 logging.debug(f"Discord response: {resp.status}")
 
 
-@app.function(
+@app.cls(
     image=image,
     volumes={"/data": db_volume},
     secrets=[discord_secret],
 )
-async def process_and_reply(
-    content: str,
-    username: str,
-    app_id: str,
-    interaction_token: str,
-    llm_base_url: str,
-    llm_model: str,
-    log_level: str,
-) -> None:
-    """Process message through message handler and reply to Discord.
+class ModalInteractionWorker:
+    """Container-scoped worker for deferred Discord interaction processing."""
 
-    Args:
-        content: Message content to process.
-        username: Username of the person who sent the interaction.
-        app_id: Discord application ID.
-        interaction_token: Interaction token for replying.
-        llm_base_url: LLM API base URL.
-        llm_model: LLM model name.
-        log_level: Logging level.
-    """
-    # Configure logging
-    logging.basicConfig(
-        level=getattr(logging, log_level.upper(), logging.INFO),
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    )
+    def __init__(self) -> None:
+        self._services = RuntimeServiceCache()
+        self._pre_snapshot_config: RuntimeConfig | None = None
 
-    # Set environment variables
-    os.environ["LLM_BASE_URL"] = llm_base_url
-    os.environ["LLM_MODEL"] = llm_model
-    os.environ["DATABASE_PATH"] = "/data/infobot.db"
-    os.environ["LOG_LEVEL"] = log_level
+    @modal.enter()
+    def initialize_container(self) -> None:
+        """Prepare reusable state before request work begins.
 
-    from infobot.db import DatabaseConnection, initialize_schema
-    from infobot.message_handler import MessageHandler
-    from infobot.services.llm_service import LlmService
+        Pre-snapshot responsibilities:
+        - resolve runtime config
+        - configure logging
+        - instantiate a baseline LLM service so snapshots can capture warm state
 
-    db: DatabaseConnection | None = None
+        Post-snapshot/per-request responsibilities:
+        - open DB connection
+        - initialize schema
+        - construct request-scoped MessageHandler
+        """
+        self._pre_snapshot_config = resolve_runtime_config()
+        _configure_logging(self._pre_snapshot_config.log_level)
+        self._services.get_llm_service(
+            self._pre_snapshot_config.llm_base_url,
+            self._pre_snapshot_config.llm_model,
+        )
 
-    try:
-        # Initialize services
-        db_path = Path(os.getenv("DATABASE_PATH", "/data/infobot.db"))
-        db = DatabaseConnection(db_path)
-        await db.connect()
-        await initialize_schema(db)
+    @modal.method()
+    async def process_and_reply(
+        self,
+        content: str,
+        username: str,
+        app_id: str,
+        interaction_token: str,
+        llm_base_url: str,
+        llm_model: str,
+        log_level: str,
+    ) -> None:
+        """Process message through message handler and reply to Discord."""
+        _configure_logging(log_level)
 
-        llm_service = LlmService(model=llm_model, base_url=llm_base_url)
-        message_handler = MessageHandler(db, llm_service)
+        # Preserve existing env-based expectations used by core modules.
+        os.environ["LLM_BASE_URL"] = llm_base_url
+        os.environ["LLM_MODEL"] = llm_model
+        os.environ["DATABASE_PATH"] = "/data/infobot.db"
+        os.environ["LOG_LEVEL"] = log_level
 
-        # Process message
-        response = await message_handler.handle_message(content, username=username)
+        from infobot.db import DatabaseConnection, initialize_schema
+        from infobot.message_handler import MessageHandler
 
-        # Send response to Discord
-        if response:
-            await send_to_discord({"content": response}, app_id, interaction_token)
-        else:
+        db: DatabaseConnection | None = None
+
+        try:
+            db_path = Path(os.getenv("DATABASE_PATH", "/data/infobot.db"))
+            db = DatabaseConnection(db_path)
+            await db.connect()
+            await initialize_schema(db)
+
+            llm_service = self._services.get_llm_service(llm_base_url, llm_model)
+            message_handler = MessageHandler(db, llm_service)
+            response = await message_handler.handle_message(content, username=username)
+
+            if response:
+                await send_to_discord({"content": response}, app_id, interaction_token)
+            else:
+                await send_to_discord(
+                    {"content": "I couldn't process that request."},
+                    app_id,
+                    interaction_token,
+                )
+
+        except Exception as e:
+            logging.error(f"Error processing message: {e}", exc_info=True)
             await send_to_discord(
-                {"content": "I couldn't process that request."},
+                {"content": "Sorry, something went wrong processing your request."},
                 app_id,
                 interaction_token,
             )
+        finally:
+            if db is not None:
+                await db.close()
 
-    except Exception as e:
-        logging.error(f"Error processing message: {e}", exc_info=True)
-        await send_to_discord(
-            {"content": "Sorry, something went wrong processing your request."},
-            app_id,
-            interaction_token,
-        )
-    finally:
-        if db is not None:
-            await db.close()
+
+modal_worker = ModalInteractionWorker()
 
 
 @app.function(
@@ -277,7 +336,7 @@ def web_app():
     Returns:
         FastAPI app configured for Discord webhooks.
     """
-    from fastapi import FastAPI, HTTPException, Request
+    from fastapi import FastAPI, HTTPException
 
     web_app = FastAPI(title="Infobot Reborn Discord Bot")
 
@@ -332,7 +391,7 @@ def web_app():
             runtime_config = resolve_runtime_config()
 
             # Spawn async processing (deferred response pattern)
-            process_and_reply.spawn(
+            modal_worker.process_and_reply.spawn(
                 content=content,
                 username=username,
                 app_id=app_id,

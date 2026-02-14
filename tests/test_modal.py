@@ -6,8 +6,11 @@ import runpy
 import sys
 import types
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import patch
+
+from fastapi.testclient import TestClient
 
 
 class _FakeImage:
@@ -46,6 +49,12 @@ class _FakeApp:
 
         return decorator
 
+    def cls(self, **_kwargs: object):
+        def decorator(cls):
+            return cls
+
+        return decorator
+
     def local_entrypoint(self):
         def decorator(func):
             return func
@@ -67,6 +76,8 @@ def _load_modal_globals() -> dict[str, Any]:
         Image=_FakeImageFactory,
         Secret=_FakeSecretFactory,
         asgi_app=_identity_decorator,
+        enter=_identity_decorator,
+        method=_identity_decorator,
     )
     with patch.dict(sys.modules, {"modal": fake_modal}):
         modal_path = Path(__file__).resolve().parents[1] / "src" / "modal.py"
@@ -80,6 +91,11 @@ DEFAULT_LLM_BASE_URL = cast(str, _MODAL_GLOBALS["DEFAULT_LLM_BASE_URL"])
 DEFAULT_LLM_MODEL = cast(str, _MODAL_GLOBALS["DEFAULT_LLM_MODEL"])
 DEFAULT_LOG_LEVEL = cast(str, _MODAL_GLOBALS["DEFAULT_LOG_LEVEL"])
 APP_CONFIG_PREFIX = cast(str, _MODAL_GLOBALS["APP_CONFIG_PREFIX"])
+RuntimeServiceCache = cast(Any, _MODAL_GLOBALS["RuntimeServiceCache"])
+RuntimeConfig = cast(Any, _MODAL_GLOBALS["RuntimeConfig"])
+DiscordInteractionType = cast(Any, _MODAL_GLOBALS["DiscordInteractionType"])
+DiscordResponseType = cast(Any, _MODAL_GLOBALS["DiscordResponseType"])
+web_app_factory = cast(Any, _MODAL_GLOBALS["web_app"])
 
 
 def test_resolve_runtime_config_uses_defaults() -> None:
@@ -147,3 +163,120 @@ def test_resolve_runtime_config_invalid_log_level_uses_default() -> None:
     config = resolve_runtime_config({"LOG_LEVEL": "not-a-level"})
 
     assert config.log_level == DEFAULT_LOG_LEVEL
+
+
+def test_runtime_service_cache_reuses_service_for_same_config() -> None:
+    """Same runtime tuple should reuse one cached service instance."""
+    calls: list[tuple[str, str]] = []
+
+    def fake_factory(llm_base_url: str, llm_model: str) -> object:
+        calls.append((llm_base_url, llm_model))
+        return object()
+
+    cache = RuntimeServiceCache(llm_factory=fake_factory)
+    first = cache.get_llm_service("http://llm.local/v1", "model-a")
+    second = cache.get_llm_service("http://llm.local/v1", "model-a")
+
+    assert first is second
+    assert calls == [("http://llm.local/v1", "model-a")]
+
+
+def test_runtime_service_cache_separates_services_per_runtime_tuple() -> None:
+    """Different runtime tuples should produce separate cached services."""
+    calls: list[tuple[str, str]] = []
+
+    def fake_factory(llm_base_url: str, llm_model: str) -> object:
+        calls.append((llm_base_url, llm_model))
+        return object()
+
+    cache = RuntimeServiceCache(llm_factory=fake_factory)
+    first = cache.get_llm_service("http://llm.local/v1", "model-a")
+    second = cache.get_llm_service("http://llm.local/v1", "model-b")
+
+    assert first is not second
+    assert calls == [
+        ("http://llm.local/v1", "model-a"),
+        ("http://llm.local/v1", "model-b"),
+    ]
+
+
+def test_webhook_ping_returns_pong(monkeypatch: Any) -> None:
+    """Webhook PING interactions should still return Discord PONG responses."""
+    web_app_globals = web_app_factory.__globals__
+    monkeypatch.setitem(
+        web_app_globals,
+        "authenticate",
+        lambda _headers, _body: None,
+    )
+
+    app = web_app_factory()
+    client = TestClient(app)
+    response = client.post(
+        "/interactions",
+        json={"type": DiscordInteractionType.PING.value},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"type": DiscordResponseType.PONG.value}
+
+
+def test_webhook_command_returns_deferred_and_spawns_worker(monkeypatch: Any) -> None:
+    """Command interactions should still defer immediately and spawn background work."""
+    spawn_calls: list[dict[str, str]] = []
+
+    runtime_config = RuntimeConfig(
+        llm_base_url="http://runtime.example/v1",
+        llm_model="runtime-model",
+        log_level="DEBUG",
+    )
+
+    def fake_spawn(**kwargs: str) -> None:
+        spawn_calls.append(kwargs)
+
+    fake_worker = SimpleNamespace(
+        process_and_reply=SimpleNamespace(spawn=fake_spawn),
+    )
+
+    web_app_globals = web_app_factory.__globals__
+    monkeypatch.setitem(
+        web_app_globals,
+        "authenticate",
+        lambda _headers, _body: None,
+    )
+    monkeypatch.setitem(
+        web_app_globals,
+        "resolve_runtime_config",
+        lambda: runtime_config,
+    )
+    monkeypatch.setitem(web_app_globals, "modal_worker", fake_worker)
+
+    app = web_app_factory()
+    client = TestClient(app)
+    response = client.post(
+        "/interactions",
+        json={
+            "type": DiscordInteractionType.APPLICATION_COMMAND.value,
+            "application_id": "app-123",
+            "token": "token-abc",
+            "data": {
+                "name": "ask",
+                "options": [{"name": "question", "value": "What is python?"}],
+            },
+            "member": {"user": {"username": "alice"}},
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "type": DiscordResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE.value
+    }
+    assert len(spawn_calls) == 1
+    assert spawn_calls[0] == {
+        "content": "What is python?",
+        "username": "alice",
+        "app_id": "app-123",
+        "interaction_token": "token-abc",
+        "llm_base_url": "http://runtime.example/v1",
+        "llm_model": "runtime-model",
+        "log_level": "DEBUG",
+    }
