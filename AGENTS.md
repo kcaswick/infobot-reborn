@@ -190,6 +190,14 @@ tests/                    # pytest test suite
 - **Commit Granularity**: Commit in reasonable-sized pieces. Each commit should be one logical change — not a giant monolithic dump of an entire feature. For example, "add factoid data model" and "add factoid CRUD operations" are separate commits, not one. This makes review, bisection, and rollback practical.
 - **Parallel Work**: When multiple beads are unblocked and can be worked on simultaneously, use `ntm` to spawn agents and assign beads to them. Single-bead work doesn't require ntm.
 
+### Temporary Artifacts & Coordination
+- Keep ephemeral scratch artifacts in `temp/` (preferred) or `/tmp/`.
+- If another agent must read the artifact, use `temp/` (some agent/tool setups do not reliably read outside the project root).
+- Use Agent Mail threads/bodies for cross-agent coordination notes and handoffs.
+- Do not put temporary planning/checklist artifacts in `docs/`.
+- Never stage or commit scratch artifacts from `temp/` or `/tmp/`.
+- Keep canonical assignment/completion state in beads and GitHub PR comments.
+
 <!-- br-agent-instructions-v1 -->
 
 ---
