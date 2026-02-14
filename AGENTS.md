@@ -142,10 +142,16 @@ tests/                    # pytest test suite
   - Follow OWASP guidelines for web applications
 - **Testing**:
   - Write pytest tests with descriptive names
+  - Follow a strict TDD/BDD approach: Red → Green → Refactor
   - Aim for high test coverage (>80%)
   - Use fixtures and parametrization 
   - Test both success and error cases
   - Mock external dependencies
+  - **CRITICAL**: Tests must FAIL when the implementation is broken. Never write tests that pass with broken implementations.
+  - **CRITICAL**: Tests are NOT documentation of current behavior - they verify CORRECT behavior.
+  - **CRITICAL**: If implementation has bugs, tests must expect the CORRECT behavior, not document the buggy behavior.
+  - **NEVER**: Write tests that pass when implementation is broken - this provides false confidence and hides real problems.
+  - **NEVER**: Write mock-only tests that can't catch real implementation bugs - prefer testing actual logic or skip until real testing is possible.
 - **Naming**: 
   - Functions/variables: snake_case
   - Classes: PascalCase
@@ -167,6 +173,20 @@ tests/                    # pytest test suite
 
     bd-6lc
     ```
+
+  **AI Agent Authorship**:
+  - When commits are mostly or entirely AI-generated, include co-authorship credit in the commit message
+  - Use the `Co-authored-by:` trailer format at the end of the commit message body
+  - Standard formats (include specific model name and version when known with certainty **and do not guess**; if only the tool/family is known, use that name without a version):
+    - GitHub Copilot (underlying model unknown): `Co-authored-by: GitHub Copilot <copilot@github.com>`
+    - GitHub Copilot (underlying model and version known): `Co-authored-by: GitHub Copilot (ExampleModel Furious 9.9) <copilot@github.com>`
+    - Claude: `Co-authored-by: Claude Haiku 4.5 <claude@anthropic.com>` or `Claude Sonnet 4 <claude@anthropic.com>` etc.
+    - Gemini: `Co-authored-by: Gemini 2.0 Flash <gemini@google.com>` or appropriate version
+    - Unknown tool/model: `Co-authored-by: AI Assistant <ai@example.com>` (if neither the tool nor model identity can be determined)
+  - This maintains transparency about AI contributions and helps track AI-assisted development patterns
+  - For pull requests with substantial AI involvement, consider adding an "AI Involvement" section explaining which tools contributed
+
+  **⚠️ REMINDER: Every commit must follow the format above - concise first line (50-72 chars), bullets by importance, AI co-authorship**
 - **Commit Granularity**: Commit in reasonable-sized pieces. Each commit should be one logical change — not a giant monolithic dump of an entire feature. For example, "add factoid data model" and "add factoid CRUD operations" are separate commits, not one. This makes review, bisection, and rollback practical.
 - **Parallel Work**: When multiple beads are unblocked and can be worked on simultaneously, use `ntm` to spawn agents and assign beads to them. Single-bead work doesn't require ntm.
 
