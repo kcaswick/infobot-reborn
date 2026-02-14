@@ -10,11 +10,12 @@ Deploys the Discord bot using Discord Interactions API (HTTP webhooks) with:
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from enum import Enum
 import json
 import logging
 import os
+from collections.abc import Mapping
+from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 
 import modal
@@ -67,6 +68,66 @@ discord_secret = modal.Secret.from_name(
         "DISCORD_PUBLIC_KEY",
     ],
 )
+
+APP_CONFIG_PREFIX = "APP_CONFIG_"
+DEFAULT_LLM_BASE_URL = "http://localhost:11434/v1"
+DEFAULT_LLM_MODEL = "qwen3:1.7b"
+DEFAULT_LOG_LEVEL = "INFO"
+
+
+@dataclass(frozen=True)
+class RuntimeConfig:
+    """Runtime settings passed into message processing jobs."""
+
+    llm_base_url: str
+    llm_model: str
+    log_level: str
+
+
+def _resolve_config_value(key: str, default: str, env: Mapping[str, str]) -> str:
+    """Resolve a config value with secret-first precedence.
+
+    Precedence:
+    1) APP_CONFIG_{key} (secret-friendly namespace)
+    2) {key} (legacy env variable)
+    3) default
+    """
+    secret_key = f"{APP_CONFIG_PREFIX}{key}"
+
+    secret_value = env.get(secret_key)
+    if secret_value and secret_value.strip():
+        return secret_value.strip()
+
+    env_value = env.get(key)
+    if env_value and env_value.strip():
+        return env_value.strip()
+
+    return default
+
+
+def resolve_runtime_config(env: Mapping[str, str] | None = None) -> RuntimeConfig:
+    """Resolve runtime config for Modal interactions with deterministic precedence."""
+    runtime_env = os.environ if env is None else env
+
+    llm_base_url = _resolve_config_value(
+        "LLM_BASE_URL",
+        DEFAULT_LLM_BASE_URL,
+        runtime_env,
+    )
+    llm_model = _resolve_config_value("LLM_MODEL", DEFAULT_LLM_MODEL, runtime_env)
+    log_level = _resolve_config_value(
+        "LOG_LEVEL",
+        DEFAULT_LOG_LEVEL,
+        runtime_env,
+    ).upper()
+    if not hasattr(logging, log_level):
+        log_level = DEFAULT_LOG_LEVEL
+
+    return RuntimeConfig(
+        llm_base_url=llm_base_url,
+        llm_model=llm_model,
+        log_level=log_level,
+    )
 
 
 def authenticate(headers: Mapping[str, str], body: bytes) -> None:
@@ -268,10 +329,7 @@ def web_app():
             app_id = data["application_id"]
             interaction_token = data["token"]
 
-            # Get environment config
-            llm_base_url = os.getenv("LLM_BASE_URL", "http://localhost:11434/v1")
-            llm_model = os.getenv("LLM_MODEL", "qwen3:1.7b")
-            log_level = os.getenv("LOG_LEVEL", "INFO")
+            runtime_config = resolve_runtime_config()
 
             # Spawn async processing (deferred response pattern)
             process_and_reply.spawn(
@@ -279,9 +337,9 @@ def web_app():
                 username=username,
                 app_id=app_id,
                 interaction_token=interaction_token,
-                llm_base_url=llm_base_url,
-                llm_model=llm_model,
-                log_level=log_level,
+                llm_base_url=runtime_config.llm_base_url,
+                llm_model=runtime_config.llm_model,
+                log_level=runtime_config.log_level,
             )
 
             # Return deferred response immediately
