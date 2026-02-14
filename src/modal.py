@@ -309,6 +309,7 @@ def register_commands(force: bool = False):
     if not bot_token or not client_id:
         raise ValueError("DISCORD_BOT_TOKEN and DISCORD_CLIENT_ID must be configured")
 
+    # Security: Never log this headers dict - contains bot token
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bot {bot_token}",

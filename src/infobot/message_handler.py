@@ -96,6 +96,7 @@ class MessageHandler:
             return await self._handle_factoid_query(query_intent, username)
 
         # No intent matched
+        # Security: Do not log full message content in production - use INFO level or sanitize for DEBUG
         logger.debug(f"No intent matched for message: {message}")
         return self._format_response(
             "I don't understand. You can ask me about factoids or teach me new ones!",

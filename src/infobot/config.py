@@ -50,6 +50,7 @@ class Config:
             )
 
         # Optional vars with defaults
+        # Security: If setting LLM_BASE_URL to a remote service, use HTTPS to protect API keys and prompts
         llm_base_url = os.getenv("LLM_BASE_URL", "http://localhost:11434/v1")
         llm_model = os.getenv("LLM_MODEL", "qwen3:1.7b")
         database_path = Path(os.getenv("DATABASE_PATH", "data/infobot.db"))
