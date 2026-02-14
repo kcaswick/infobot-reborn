@@ -130,6 +130,7 @@ async def send_to_discord(payload: dict, app_id: str, interaction_token: str) ->
 @app.function(
     image=image,
     volumes={"/data": db_volume},
+    secrets=[discord_secret],
 )
 async def process_and_reply(
     content: str,
