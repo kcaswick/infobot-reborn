@@ -21,7 +21,6 @@ from infobot.nlu import (
 )
 from infobot.prompts import build_main_prompt
 from infobot.services.llm_service import (
-    ChatMessage,
     LlmRequest,
     LlmService,
     LlmServiceError,
@@ -261,13 +260,11 @@ class MessageHandler:
         try:
             request = LlmRequest(
                 messages=[
-                    ChatMessage(role="system", content=build_main_prompt()),
-                    ChatMessage(
-                        role="user",
-                        content=(
-                            f"Enhance this factoid about '{topic}': {base_response}"
-                        ),
-                    ),
+                    {"role": "system", "content": build_main_prompt()},
+                    {
+                        "role": "user",
+                        "content": f"Enhance this factoid about '{topic}': {base_response}",
+                    },
                 ],
                 temperature=0.7,
                 max_tokens=150,

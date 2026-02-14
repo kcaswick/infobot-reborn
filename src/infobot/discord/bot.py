@@ -32,7 +32,7 @@ class InfobotBot(commands.Bot):
         # Initialize discord.py bot with intents
         intents = discord.Intents.default()
         intents.message_content = True  # Enable reading message content
-        intents.direct_messages = True  # Enable DMs
+        intents.dm_messages = True  # Enable DMs
         intents.guild_messages = True  # Enable server messages
 
         super().__init__(
