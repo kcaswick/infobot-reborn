@@ -42,6 +42,16 @@ uv sync
 # uv sync --group dev
 ```
 
+### Configuration
+
+Copy `.env.example` to `.env` and set required values:
+
+- `DISCORD_BOT_TOKEN` is required to run the local Discord bot and to register
+  slash commands in Modal (`modal run src/modal.py::register_commands`).
+- `DISCORD_CLIENT_ID` and `DISCORD_PUBLIC_KEY` are required for Modal deployments
+  (webhook verification + command registration).
+- Optional: `LLM_BASE_URL`, `LLM_MODEL`, `DATABASE_PATH`, `LOG_LEVEL`.
+
 ### Running Locally
 
 ```bash
@@ -53,6 +63,25 @@ python src/main.py
 ```bash
 modal deploy src/modal.py
 ```
+
+Modal runtime settings used by `src/modal.py` follow deterministic precedence:
+
+1. Secret-backed `APP_CONFIG_*` keys
+2. Legacy environment-variable keys
+3. Built-in defaults
+
+| Setting | Secret-backed key | Legacy env key | Default |
+| --- | --- | --- | --- |
+| LLM base URL | `APP_CONFIG_LLM_BASE_URL` | `LLM_BASE_URL` | `http://localhost:11434/v1` |
+| LLM model | `APP_CONFIG_LLM_MODEL` | `LLM_MODEL` | `qwen3:1.7b` |
+| Log level | `APP_CONFIG_LOG_LEVEL` | `LOG_LEVEL` | `INFO` |
+
+Configuration options:
+
+- Keep using env-only deployments (no migration required).
+- Provide `APP_CONFIG_*` keys via Modal secrets for explicit app-level overrides.
+  - Current `src/modal.py` mounts `discord-secret`, so add `APP_CONFIG_*` keys
+    to that secret for secret-backed precedence.
 
 ## Architecture
 

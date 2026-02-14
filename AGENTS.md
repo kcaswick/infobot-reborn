@@ -1,4 +1,4 @@
-# CLAUDE.md: Guide for Infobot Reborn
+# AGENTS.md: Guide for Infobot Reborn
 
 ## Build & Run Commands
 - Create/update virtualenv: `uv venv`
@@ -7,8 +7,8 @@
 - Add new dependency: `uv add <package-name>`
 - Add new dev dependency: `uv add --group dev <package-name>`
 - Run locally: `python src/main.py`
-- Run on Modal: `modal serve src/modal.py`
 - Deploy to Modal: `modal deploy src/modal.py`
+- Register Discord commands: `modal run src/modal.py::register_commands`
 - Format code: `black src/ tests/`
 - Lint code: `ruff check src/ tests/`
 - Type check: `mypy src/ tests/`
@@ -17,6 +17,103 @@
 - Run with test coverage: `pytest --cov=src tests/`
 - Generate coverage report: `pytest --cov=src --cov-report=html tests/`
 - Scan dependencies for security vulnerabilities: `safety check`
+
+## Local Development Prerequisites
+- **Python 3.11+** (managed via `.python-version`)
+- **uv** for dependency management
+- **ollama** for local LLM inference (provides OpenAI-compatible endpoint)
+  - Install: https://ollama.com
+  - Pull a small model for dev: `ollama pull qwen3:1.7b`
+  - The bot connects to ollama at `http://localhost:11434/v1` by default
+
+## Environment Variables
+All configuration is via environment variables. Copy `.env.example` to `.env` for local dev.
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `DISCORD_BOT_TOKEN` | Yes (for Discord) | — | Discord bot token from Developer Portal |
+| `DISCORD_CLIENT_ID` | Yes (for Modal) | — | Discord application/client ID |
+| `DISCORD_PUBLIC_KEY` | Yes (for Modal) | — | Discord public key for signature verification |
+| `LLM_BASE_URL` | No | `http://localhost:11434/v1` | OpenAI-compatible API base URL |
+| `LLM_MODEL` | No | `qwen3:1.7b` | Model name to request from the LLM server |
+| `DATABASE_PATH` | No | `data/infobot.db` | Path to SQLite database file |
+| `LOG_LEVEL` | No | `INFO` | Logging level |
+
+## Modal Deployment (Production)
+
+The bot uses Discord's Interactions API (HTTP webhooks) for serverless deployment on Modal, not the Gateway API (WebSocket). This is the correct architecture for serverless platforms.
+
+### Architecture
+- **HTTP-based**: FastAPI endpoint receives Discord interactions via webhooks
+- **Signature verification**: Ed25519 cryptographic verification of all requests
+- **Deferred responses**: Long-running operations use Discord's deferred response pattern
+- **Persistent storage**: SQLite database on Modal Volume for factoid storage
+
+### Prerequisites
+1. **Modal account**: Sign up at https://modal.com
+2. **Modal CLI**: `pip install modal` (already in dependencies)
+3. **Discord application**: Create at https://discord.com/developers/applications
+4. **Discord bot configured**:
+   - Enable "bot" and "applications.commands" scopes
+   - Copy Bot Token, Client ID, and Public Key
+
+### Setup Steps
+
+1. **Configure Modal secrets** (in Modal dashboard or CLI):
+   ```bash
+   modal secret create discord-secret \
+     DISCORD_BOT_TOKEN=your_bot_token \
+     DISCORD_CLIENT_ID=your_client_id \
+     DISCORD_PUBLIC_KEY=your_public_key
+   ```
+
+2. **Deploy the application**:
+   ```bash
+   modal deploy src/modal.py
+   ```
+   This will output a webhook URL like `https://your-app--web-app.modal.run/interactions`
+
+3. **Configure Discord webhook**:
+   - Go to Discord Developer Portal → Your Application → General Information
+   - Set "Interactions Endpoint URL" to: `https://your-app--web-app.modal.run/interactions`
+   - Discord will send a PING to verify - the endpoint will respond with PONG
+
+4. **Register slash commands**:
+   ```bash
+   modal run src/modal.py::register_commands
+   ```
+   This registers `/ask` and `/teach` commands with Discord
+
+### Usage
+Users can interact with the bot via:
+- `/ask <question>` - Ask the bot a question
+- `/teach <factoid>` - Teach the bot a new factoid (format: "key is value")
+
+### Development vs Production
+- **Local development**: Use `python src/main.py` with discord.py Gateway API (WebSocket)
+- **Modal production**: Uses Interactions API (HTTP webhooks) - different architecture entirely
+
+### Key Differences from Gateway API
+| Aspect | Gateway API (Local) | Interactions API (Modal) |
+|--------|---------------------|--------------------------|
+| Connection | Persistent WebSocket | HTTP webhooks |
+| Message handling | All messages via events | Only slash commands/interactions |
+| Deployment | Long-running process | Serverless functions |
+| Discord setup | Just bot token | Token + Public Key + Webhook URL |
+| Libraries | discord.py | FastAPI + PyNaCl |
+
+## Module Structure
+```
+src/infobot/              # Main package (importable as `infobot`)
+  __init__.py             # Package root, __version__
+  config.py               # Settings loaded from env vars
+  db/                     # SQLite database layer (aiosqlite)
+  kb/                     # Knowledge base — factoid CRUD
+  nlu/                    # Question parser + intent detector
+  formatter/              # Response formatting (<reply>, variables, etc.)
+src/main.py               # CLI entry point
+tests/                    # pytest test suite
+```
 
 ## Code Style Guidelines
 - **Architecture**: Modal-specific code only in modal.py; core logic should be hosting-agnostic
@@ -45,24 +142,61 @@
   - Follow OWASP guidelines for web applications
 - **Testing**:
   - Write pytest tests with descriptive names
+  - Follow a strict TDD/BDD approach: Red → Green → Refactor
   - Aim for high test coverage (>80%)
   - Use fixtures and parametrization 
   - Test both success and error cases
   - Mock external dependencies
+  - **CRITICAL**: Tests must FAIL when the implementation is broken. Never write tests that pass with broken implementations.
+  - **CRITICAL**: Tests are NOT documentation of current behavior - they verify CORRECT behavior.
+  - **CRITICAL**: If implementation has bugs, tests must expect the CORRECT behavior, not document the buggy behavior.
+  - **NEVER**: Write tests that pass when implementation is broken - this provides false confidence and hides real problems.
+  - **NEVER**: Write mock-only tests that can't catch real implementation bugs - prefer testing actual logic or skip until real testing is possible.
 - **Naming**: 
   - Functions/variables: snake_case
   - Classes: PascalCase
   - Constants: UPPER_SNAKE_CASE
 - **Error Handling**: Use explicit exception types; add context with `raise ... from`
 - **Documentation**: Docstrings for all public functions/classes (Google style)
-- **Commit Messages**: Use conventional commit prefixes:
-  - `feat:` New features
-  - `fix:` Bug fixes
-  - `docs:` Documentation changes
-  - `style:` Formatting changes (whitespace, etc)
-  - `refactor:` Code changes that neither add features nor fix bugs
-  - `test:` Adding or refactoring tests
-  - `chore:` Maintenance tasks, dependency updates, etc.
+- **Commit Messages**:
+  - Format: `<type>(<scope>): <subject>` — subject line max 72 chars
+  - Types: `feat`, `fix`, `docs`, `style`, `refactor`, `test`, `chore`
+  - Scopes: use the module or area being changed (e.g., `kb`, `nlu`, `discord`, `db`, `config`, `modal`)
+  - Bead reference: append bead ID on its own line at the end (e.g., `bd-6lc`)
+  - Body (optional): explain **why**, not what. Do not restate the diff in English. Keep it to 1-3 sentences if included.
+  - Example:
+    ```
+    feat(kb): add factoid data model
+
+    Factoids are the core knowledge unit inherited from the original
+    Infobot — needed before any retrieval or NLU work can begin.
+
+    bd-6lc
+    ```
+
+  **AI Agent Authorship**:
+  - When commits are mostly or entirely AI-generated, include co-authorship credit in the commit message
+  - Use the `Co-authored-by:` trailer format at the end of the commit message body
+  - Standard formats (include specific model name and version when known with certainty **and do not guess**; if only the tool/family is known, use that name without a version):
+    - GitHub Copilot (underlying model unknown): `Co-authored-by: GitHub Copilot <copilot@github.com>`
+    - GitHub Copilot (underlying model and version known): `Co-authored-by: GitHub Copilot (ExampleModel Furious 9.9) <copilot@github.com>`
+    - Claude: `Co-authored-by: Claude Haiku 4.5 <claude@anthropic.com>` or `Claude Sonnet 4 <claude@anthropic.com>` etc.
+    - Gemini: `Co-authored-by: Gemini 2.0 Flash <gemini@google.com>` or appropriate version
+    - Unknown tool/model: `Co-authored-by: AI Assistant <ai@example.com>` (if neither the tool nor model identity can be determined)
+  - This maintains transparency about AI contributions and helps track AI-assisted development patterns
+  - For pull requests with substantial AI involvement, consider adding an "AI Involvement" section explaining which tools contributed
+
+  **⚠️ REMINDER: Every commit must follow the format above - concise first line (50-72 chars), bullets by importance, AI co-authorship**
+- **Commit Granularity**: Commit in reasonable-sized pieces. Each commit should be one logical change — not a giant monolithic dump of an entire feature. For example, "add factoid data model" and "add factoid CRUD operations" are separate commits, not one. This makes review, bisection, and rollback practical.
+- **Parallel Work**: When multiple beads are unblocked and can be worked on simultaneously, use `ntm` to spawn agents and assign beads to them. Single-bead work doesn't require ntm.
+
+### Temporary Artifacts & Coordination
+- Keep ephemeral scratch artifacts in `temp/` (preferred) or `/tmp/`.
+- If another agent must read the artifact, use `temp/` (some agent/tool setups do not reliably read outside the project root).
+- Use Agent Mail threads/bodies for cross-agent coordination notes and handoffs.
+- Do not put temporary planning/checklist artifacts in `docs/`.
+- Never stage or commit scratch artifacts from `temp/` or `/tmp/`.
+- Keep canonical assignment/completion state in beads and GitHub PR comments.
 
 <!-- br-agent-instructions-v1 -->
 

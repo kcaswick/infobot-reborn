@@ -1,3 +1,10 @@
+# Temporary files
+temp/
+
+# Runtime data directory - instance-specific
+data/*
+!data/.gitkeep
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -172,3 +179,7 @@ cython_debug/
 
 # bv (beads viewer) local config and caches
 .bv/
+
+# ntm local state (keep shared config if present)
+.ntm/
+!.ntm/config.toml

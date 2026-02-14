@@ -32,6 +32,10 @@ This document catalogs the core features and behaviors of the original Infobot b
 - **Altering Parts**: `X =~ s/A/B/` - Changes part of a factoid using regex substitution
 - **Backwacking**: Using `\` to protect items from evaluation (e.g., `X \is Y` to prevent "is" from being interpreted as a command)
 
+### Technical Constraints
+- **Key Length (`maxKeySize`)**: Keys (the left-hand side/trigger phrase) are limited to 30 characters by default.
+- **Value Length (`maxDataSize`)**: The total length of a factoid value is limited to 200 characters by default. This includes the combined length when using "also" to append to an existing factoid.
+
 ## Conversational Style
 
 From the log file and factoid databases, we can observe:
