@@ -111,7 +111,9 @@ def mock_llm_client():
             client = mock_llm_client([
                 SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="hello"))])
             ])
-            service = LlmService(model="test", base_url="http://localhost", client=client)
+            service = LlmService(
+                model="test", base_url="http://localhost", client=client
+            )
             response = await service.chat(...)
     """
 
