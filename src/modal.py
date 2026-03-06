@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import Enum
@@ -164,15 +165,22 @@ class RuntimeServiceCache:
     ) -> None:
         self._llm_factory = llm_factory or _build_llm_service
         self._llm_services: dict[tuple[str, str], LlmService] = {}
+        self._lock = threading.Lock()
 
     def get_llm_service(self, llm_base_url: str, llm_model: str) -> LlmService:
         """Get or create a cached LLM service for a runtime tuple."""
         key = (llm_base_url, llm_model)
+        # Fast path: check without lock
         service = self._llm_services.get(key)
-        if service is None:
-            service = self._llm_factory(llm_base_url, llm_model)
-            self._llm_services[key] = service
-        return service
+        if service is not None:
+            return service
+        # Slow path: double-checked locking for thread safety
+        with self._lock:
+            service = self._llm_services.get(key)
+            if service is None:
+                service = self._llm_factory(llm_base_url, llm_model)
+                self._llm_services[key] = service
+            return service
 
 
 def authenticate(headers: Mapping[str, str], body: bytes) -> None:
@@ -280,19 +288,13 @@ class ModalInteractionWorker:
         """Process message through message handler and reply to Discord."""
         _configure_logging(log_level)
 
-        # Preserve existing env-based expectations used by core modules.
-        os.environ["LLM_BASE_URL"] = llm_base_url
-        os.environ["LLM_MODEL"] = llm_model
-        os.environ["DATABASE_PATH"] = "/data/infobot.db"
-        os.environ["LOG_LEVEL"] = log_level
-
         from infobot.db import DatabaseConnection, initialize_schema
         from infobot.message_handler import MessageHandler
 
         db: DatabaseConnection | None = None
 
         try:
-            db_path = Path(os.getenv("DATABASE_PATH", "/data/infobot.db"))
+            db_path = Path("/data/infobot.db")
             db = DatabaseConnection(db_path)
             await db.connect()
             await initialize_schema(db)

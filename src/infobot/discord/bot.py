@@ -115,8 +115,10 @@ class InfobotBot(commands.Bot):
         if message.guild is None:
             context_info = f"DM from {message.author}"
         else:
-            context_info = f"#{message.channel.name} in {message.guild.name}"
-        # Security: Do not log full message content in production - use INFO level or sanitize for DEBUG
+            chan = getattr(message.channel, "name", message.channel.id)
+            context_info = f"#{chan} in {message.guild.name}"
+        # Security: Do not log full message content in production
+        # — use INFO level or sanitize for DEBUG
         logger.debug(
             f"Message from {message.author} ({context_info}): {message.content}"
         )
