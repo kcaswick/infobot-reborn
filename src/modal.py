@@ -213,7 +213,12 @@ def authenticate(headers: Mapping[str, str], body: bytes) -> None:
     message = timestamp.encode() + body
 
     try:
-        verify_key.verify(message, bytes.fromhex(signature))
+        sig_bytes = bytes.fromhex(signature)
+    except ValueError:
+        raise HTTPException(status_code=401, detail="Malformed signature hex")
+
+    try:
+        verify_key.verify(message, sig_bytes)
     except BadSignatureError:
         raise HTTPException(status_code=401, detail="Invalid request signature")
 

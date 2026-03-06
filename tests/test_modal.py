@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import patch
 
+import pytest
 from fastapi.testclient import TestClient
 
 
@@ -96,6 +97,7 @@ RuntimeConfig = cast(Any, _MODAL_GLOBALS["RuntimeConfig"])
 DiscordInteractionType = cast(Any, _MODAL_GLOBALS["DiscordInteractionType"])
 DiscordResponseType = cast(Any, _MODAL_GLOBALS["DiscordResponseType"])
 web_app_factory = cast(Any, _MODAL_GLOBALS["web_app"])
+authenticate = cast(Any, _MODAL_GLOBALS["authenticate"])
 
 
 def test_resolve_runtime_config_uses_defaults() -> None:
@@ -280,3 +282,23 @@ def test_webhook_command_returns_deferred_and_spawns_worker(monkeypatch: Any) ->
         "llm_model": "runtime-model",
         "log_level": "DEBUG",
     }
+
+
+def test_authenticate_malformed_signature_hex_returns_401(monkeypatch: Any) -> None:
+    """Malformed hex in client signature header should raise 401, not 500 (bd-qc8)."""
+    from fastapi.exceptions import HTTPException
+
+    # Valid 32-byte public key hex so server config is fine
+    valid_pubkey = "a" * 64
+    monkeypatch.setenv("DISCORD_PUBLIC_KEY", valid_pubkey)
+
+    headers = {
+        "x-signature-ed25519": "not-valid-hex!@#$",
+        "x-signature-timestamp": "1234567890",
+    }
+
+    with pytest.raises(HTTPException) as exc_info:
+        authenticate(headers, b'{"type":1}')
+
+    assert exc_info.value.status_code == 401
+    assert "Malformed signature hex" in exc_info.value.detail
