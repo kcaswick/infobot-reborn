@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import random
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional, Protocol, Sequence
-
+from typing import Protocol
 
 _REPLY_RE = re.compile(r"<reply>(?P<content>.*?)</reply>", re.IGNORECASE | re.DOTALL)
 _ACTION_RE = re.compile(r"<action>(?P<content>.*?)</action>", re.IGNORECASE | re.DOTALL)
@@ -31,7 +31,7 @@ class SupportsChoice(Protocol):
 def format_response(
     template: str,
     context: FormatContext,
-    rng: Optional[SupportsChoice] = None,
+    rng: SupportsChoice | None = None,
 ) -> str:
     """Format a response template into a message.
 
@@ -45,8 +45,9 @@ def format_response(
     """
 
     rng = rng or random
-    selected = _select_variant(template, rng)
-    mode, content = _extract_tag(selected)
+    mode, content = _extract_tag(template)
+    if mode is None:
+        content = _select_variant(content, rng)
     rendered = _substitute_variables(content, context).strip()
 
     if mode == "action":
@@ -66,7 +67,7 @@ def _select_variant(template: str, rng: SupportsChoice) -> str:
     return rng.choice(parts)
 
 
-def _extract_tag(template: str) -> tuple[Optional[str], str]:
+def _extract_tag(template: str) -> tuple[str | None, str]:
     reply_match = _REPLY_RE.search(template)
     if reply_match:
         return "reply", reply_match.group("content").strip()
