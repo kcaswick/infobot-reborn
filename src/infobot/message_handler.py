@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 
 from infobot.formatter import FormatContext, format_response
 from infobot.kb import Factoid, FactoidStore, FactoidType
+from infobot.logging_utils import sanitize_message_preview
 from infobot.nlu import (
     FactoidCreateIntent,
     FactoidQueryIntent,
@@ -95,9 +96,9 @@ class MessageHandler:
             return await self._handle_factoid_query(query_intent, username)
 
         # No intent matched
-        # Security: Do not log full message content in production
-        # — use INFO level or sanitize for DEBUG
-        logger.debug(f"No intent matched for message: {message}")
+        # Security: Sanitize message content to avoid logging PII
+        preview = sanitize_message_preview(message)
+        logger.debug(f"No intent matched for message: {preview}")
         return self._format_response(
             "I don't understand. You can ask me about factoids or teach me new ones!",
             username,

@@ -10,6 +10,7 @@ from discord.ext import commands
 
 from infobot.config import Config
 from infobot.db import DatabaseConnection, initialize_schema
+from infobot.logging_utils import sanitize_message_preview
 from infobot.message_handler import MessageHandler
 from infobot.services.llm_service import LlmService
 
@@ -117,11 +118,9 @@ class InfobotBot(commands.Bot):
         else:
             chan = getattr(message.channel, "name", message.channel.id)
             context_info = f"#{chan} in {message.guild.name}"
-        # Security: Do not log full message content in production
-        # — use INFO level or sanitize for DEBUG
-        logger.debug(
-            f"Message from {message.author} ({context_info}): {message.content}"
-        )
+        # Security: Sanitize message content to avoid logging PII
+        preview = sanitize_message_preview(message.content)
+        logger.debug(f"Message from {message.author} ({context_info}): {preview}")
 
         try:
             content = self._clean_message_content(message)
