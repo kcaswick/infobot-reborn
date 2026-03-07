@@ -132,8 +132,9 @@ class MessageHandler:
                 existing.value = f"{existing.value} | {intent.value}"
                 existing.source = username
                 await self.store.update(existing)
+                preview = sanitize_message_preview(intent.value)
                 logger.info(
-                    f"Appended to factoid '{intent.key}' by {username}: {intent.value}"
+                    f"Appended to factoid '{intent.key}' by {username}: {preview}"
                 )
                 response = (
                     f"OK, I'll remember that {intent.key} {factoid_type.value} also "
@@ -148,8 +149,9 @@ class MessageHandler:
                 existing.value = intent.value
                 existing.source = username
                 await self.store.update(existing)
+                preview = sanitize_message_preview(intent.value)
                 logger.info(
-                    f"Updated factoid '{intent.key}' by {username}: {intent.value}"
+                    f"Updated factoid '{intent.key}' by {username}: {preview}"
                 )
                 response = (
                     f"OK, I'll remember that {intent.key} {factoid_type.value} "
@@ -166,8 +168,9 @@ class MessageHandler:
                     source=username,
                 )
                 await self.store.create(factoid)
+                preview = sanitize_message_preview(intent.value)
                 logger.info(
-                    f"Created factoid '{intent.key}' by {username}: {intent.value}"
+                    f"Created factoid '{intent.key}' by {username}: {preview}"
                 )
                 response = (
                     f"OK, I'll remember that {intent.key} {factoid_type.value} "
