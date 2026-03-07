@@ -92,6 +92,21 @@ def test_factoid_has_reply_tag():
     assert not factoid.has_random_selection
 
 
+def test_factoid_has_reply_tag_case_insensitive():
+    """Reply-tag detection must match mixed-case legacy values."""
+    uppercase = Factoid(
+        key="test", value="<REPLY>just the reply", factoid_type=FactoidType.IS
+    )
+    mixed_case = Factoid(
+        key="test", value="<Reply>just the reply", factoid_type=FactoidType.IS
+    )
+
+    assert uppercase.has_reply_tag
+    assert mixed_case.has_reply_tag
+    assert not uppercase.has_random_selection
+    assert not mixed_case.has_random_selection
+
+
 def test_factoid_has_action_tag():
     """Test detection of <action> tag."""
     factoid = Factoid(
@@ -101,6 +116,21 @@ def test_factoid_has_action_tag():
     assert factoid.has_action_tag
     assert not factoid.has_reply_tag
     assert not factoid.has_random_selection
+
+
+def test_factoid_has_action_tag_case_insensitive():
+    """Action-tag detection must match mixed-case legacy values."""
+    uppercase = Factoid(
+        key="test", value="<ACTION>does something", factoid_type=FactoidType.IS
+    )
+    mixed_case = Factoid(
+        key="test", value="<Action>does something", factoid_type=FactoidType.IS
+    )
+
+    assert uppercase.has_action_tag
+    assert mixed_case.has_action_tag
+    assert not uppercase.has_random_selection
+    assert not mixed_case.has_random_selection
 
 
 def test_factoid_has_random_selection():

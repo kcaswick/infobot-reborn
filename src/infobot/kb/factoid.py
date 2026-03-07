@@ -60,12 +60,12 @@ class Factoid:
     @property
     def has_reply_tag(self) -> bool:
         """Check if factoid uses <reply> formatting."""
-        return self.value.startswith("<reply>")
+        return self.value.lower().startswith("<reply>")
 
     @property
     def has_action_tag(self) -> bool:
         """Check if factoid uses <action> formatting."""
-        return self.value.startswith("<action>")
+        return self.value.lower().startswith("<action>")
 
     @property
     def has_random_selection(self) -> bool:
