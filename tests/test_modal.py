@@ -372,6 +372,131 @@ def test_webhook_rejects_malformed_json(monkeypatch: Any) -> None:
     assert "JSON" in response.json()["detail"]
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [b"[]", b'"hi"', b"123", b"true", b"null"],
+)
+def test_webhook_rejects_non_object_json_root(
+    monkeypatch: Any,
+    payload: bytes,
+) -> None:
+    """Valid JSON values that are not objects should return 400."""
+    client = _make_noauth_client(monkeypatch)
+    response = client.post(
+        "/interactions",
+        content=payload,
+        headers={"content-type": "application/json"},
+    )
+    assert response.status_code == 400
+    assert "json object" in response.json()["detail"].lower()
+
+
+@pytest.mark.parametrize(
+    ("payload", "detail"),
+    [
+        (
+            {
+                "type": DiscordInteractionType.APPLICATION_COMMAND.value,
+                "application_id": "app-123",
+                "token": "token-abc",
+                "data": [],
+                "member": {"user": {"username": "alice"}},
+            },
+            "command data must be a json object",
+        ),
+        (
+            {
+                "type": DiscordInteractionType.APPLICATION_COMMAND.value,
+                "application_id": "app-123",
+                "token": "token-abc",
+                "data": "oops",
+                "member": {"user": {"username": "alice"}},
+            },
+            "command data must be a json object",
+        ),
+        (
+            {
+                "type": DiscordInteractionType.APPLICATION_COMMAND.value,
+                "application_id": "app-123",
+                "token": "token-abc",
+                "data": None,
+                "member": {"user": {"username": "alice"}},
+            },
+            "command data must be a json object",
+        ),
+        (
+            {
+                "type": DiscordInteractionType.APPLICATION_COMMAND.value,
+                "application_id": "app-123",
+                "token": "token-abc",
+                "data": {"name": "ask", "options": "oops"},
+                "member": {"user": {"username": "alice"}},
+            },
+            "command options must be a json array",
+        ),
+        (
+            {
+                "type": DiscordInteractionType.APPLICATION_COMMAND.value,
+                "application_id": "app-123",
+                "token": "token-abc",
+                "data": {"name": "ask", "options": ["oops"]},
+                "member": {"user": {"username": "alice"}},
+            },
+            "command options must contain json objects",
+        ),
+        (
+            {
+                "type": DiscordInteractionType.APPLICATION_COMMAND.value,
+                "application_id": "app-123",
+                "token": "token-abc",
+                "data": {
+                    "name": "ask",
+                    "options": [{"name": "question", "value": "Hi"}],
+                },
+                "member": [],
+            },
+            "interaction member must be a json object",
+        ),
+        (
+            {
+                "type": DiscordInteractionType.APPLICATION_COMMAND.value,
+                "application_id": "app-123",
+                "token": "token-abc",
+                "data": {
+                    "name": "ask",
+                    "options": [{"name": "question", "value": "Hi"}],
+                },
+                "member": {"user": "oops"},
+            },
+            "interaction member user must be a json object",
+        ),
+        (
+            {
+                "type": DiscordInteractionType.APPLICATION_COMMAND.value,
+                "application_id": "app-123",
+                "token": "token-abc",
+                "data": {
+                    "name": "ask",
+                    "options": [{"name": "question", "value": "Hi"}],
+                },
+                "user": "oops",
+            },
+            "interaction user must be a json object",
+        ),
+    ],
+)
+def test_webhook_rejects_malformed_command_payload_shapes(
+    monkeypatch: Any,
+    payload: dict[str, object],
+    detail: str,
+) -> None:
+    """Malformed nested command payload shapes should return 400."""
+    client = _make_noauth_client(monkeypatch)
+    response = client.post("/interactions", json=payload)
+    assert response.status_code == 400
+    assert detail in response.json()["detail"].lower()
+
+
 def test_webhook_command_missing_app_id_returns_400(
     monkeypatch: Any,
 ) -> None:

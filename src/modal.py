@@ -396,6 +396,12 @@ def web_app():
                 status_code=400, detail="Request body is not valid JSON"
             )
 
+        if not isinstance(data, dict):
+            raise HTTPException(
+                status_code=400,
+                detail="Request body must be a JSON object",
+            )
+
         interaction_type = data.get("type")
 
         # Handle PING (Discord verification)
@@ -405,14 +411,33 @@ def web_app():
 
         # Handle slash commands
         if interaction_type == DiscordInteractionType.APPLICATION_COMMAND.value:
-            command_name = data.get("data", {}).get("name")
+            interaction_data = data.get("data")
+            if not isinstance(interaction_data, dict):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Command data must be a JSON object",
+                )
+
+            command_name = interaction_data.get("name")
             logging.info(f"Received command: {command_name}")
 
             # Get command parameters
-            options = data.get("data", {}).get("options", [])
+            options = interaction_data.get("options", [])
+            if not isinstance(options, list):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Command options must be a JSON array",
+                )
+
             content = None
             if options:
-                content = options[0].get("value")
+                first_option = options[0]
+                if not isinstance(first_option, dict):
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Command options must contain JSON objects",
+                    )
+                content = first_option.get("value")
 
             if not content:
                 return {
@@ -421,9 +446,30 @@ def web_app():
                 }
 
             # Get user info
+            member = data.get("member")
+            if member is not None and not isinstance(member, dict):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Interaction member must be a JSON object",
+                )
+
+            member_user = member.get("user") if member is not None else None
+            if member_user is not None and not isinstance(member_user, dict):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Interaction member user must be a JSON object",
+                )
+
+            user = data.get("user")
+            if user is not None and not isinstance(user, dict):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Interaction user must be a JSON object",
+                )
+
             username = (
-                data.get("member", {}).get("user", {}).get("username")
-                or data.get("user", {}).get("username")
+                (member_user or {}).get("username")
+                or (user or {}).get("username")
                 or "unknown"
             )
 
