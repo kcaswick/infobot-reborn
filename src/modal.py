@@ -76,6 +76,7 @@ discord_secret = modal.Secret.from_name(
     ],
 )
 
+MAX_BODY_SIZE = 256 * 1024  # 256 KiB — Discord interactions are small JSON
 APP_CONFIG_PREFIX = "APP_CONFIG_"
 DEFAULT_LLM_BASE_URL = "http://localhost:11434/v1"
 DEFAULT_LLM_MODEL = "qwen3:1.7b"
@@ -201,7 +202,14 @@ def authenticate(headers: Mapping[str, str], body: bytes) -> None:
     if not public_key:
         raise HTTPException(status_code=500, detail="DISCORD_PUBLIC_KEY not configured")
 
-    verify_key = VerifyKey(bytes.fromhex(public_key))
+    try:
+        verify_key = VerifyKey(bytes.fromhex(public_key))
+    except (ValueError, Exception) as e:
+        logging.error(f"DISCORD_PUBLIC_KEY is not valid hex: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="DISCORD_PUBLIC_KEY misconfigured",
+        )
 
     normalized_headers = {key.lower(): value for key, value in headers.items()}
     signature = normalized_headers.get("x-signature-ed25519")
@@ -358,9 +366,29 @@ def web_app():
             JSON response for Discord.
         """
         body = await request.body()
+        if len(body) > MAX_BODY_SIZE:
+            raise HTTPException(
+                status_code=413,
+                detail="Request body too large",
+            )
+
         authenticate(request.headers, body)
 
-        data = json.loads(body.decode())
+        # Decode and parse JSON defensively
+        try:
+            text = body.decode("utf-8")
+        except UnicodeDecodeError:
+            raise HTTPException(
+                status_code=400, detail="Request body is not valid UTF-8"
+            )
+
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            raise HTTPException(
+                status_code=400, detail="Request body is not valid JSON"
+            )
+
         interaction_type = data.get("type")
 
         # Handle PING (Discord verification)
@@ -392,8 +420,14 @@ def web_app():
                 or "unknown"
             )
 
-            app_id = data["application_id"]
-            interaction_token = data["token"]
+            # Validate required Discord interaction fields
+            app_id = data.get("application_id")
+            interaction_token = data.get("token")
+            if not app_id or not interaction_token:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Missing required interaction fields",
+                )
 
             runtime_config = resolve_runtime_config()
 

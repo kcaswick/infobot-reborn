@@ -302,3 +302,112 @@ def test_authenticate_malformed_signature_hex_returns_401(monkeypatch: Any) -> N
 
     assert exc_info.value.status_code == 401
     assert "Malformed signature hex" in exc_info.value.detail
+
+
+def test_authenticate_malformed_public_key_hex_returns_500(
+    monkeypatch: Any,
+) -> None:
+    """Misconfigured DISCORD_PUBLIC_KEY (bad hex) should raise 500."""
+    from fastapi.exceptions import HTTPException
+
+    monkeypatch.setenv("DISCORD_PUBLIC_KEY", "not-valid-hex!!")
+
+    headers = {
+        "x-signature-ed25519": "aa" * 64,
+        "x-signature-timestamp": "1234567890",
+    }
+
+    with pytest.raises(HTTPException) as exc_info:
+        authenticate(headers, b'{"type":1}')
+
+    assert exc_info.value.status_code == 500
+    assert "misconfigured" in exc_info.value.detail.lower()
+
+
+def _make_noauth_client(monkeypatch: Any) -> TestClient:
+    """Build a TestClient with authentication disabled."""
+    web_app_globals = web_app_factory.__globals__
+    monkeypatch.setitem(
+        web_app_globals,
+        "authenticate",
+        lambda _headers, _body: None,
+    )
+    return TestClient(web_app_factory())
+
+
+def test_webhook_rejects_oversized_body(monkeypatch: Any) -> None:
+    """Bodies exceeding 256 KiB should be rejected with 413."""
+    client = _make_noauth_client(monkeypatch)
+    oversized = b"x" * (256 * 1024 + 1)
+    response = client.post(
+        "/interactions",
+        content=oversized,
+        headers={"content-type": "application/json"},
+    )
+    assert response.status_code == 413
+
+
+def test_webhook_rejects_non_utf8_body(monkeypatch: Any) -> None:
+    """Non-UTF-8 bytes should be rejected with 400."""
+    client = _make_noauth_client(monkeypatch)
+    response = client.post(
+        "/interactions",
+        content=b"\x80\x81\x82",
+        headers={"content-type": "application/json"},
+    )
+    assert response.status_code == 400
+    assert "UTF-8" in response.json()["detail"]
+
+
+def test_webhook_rejects_malformed_json(monkeypatch: Any) -> None:
+    """Invalid JSON should be rejected with 400."""
+    client = _make_noauth_client(monkeypatch)
+    response = client.post(
+        "/interactions",
+        content=b"{not json at all}",
+        headers={"content-type": "application/json"},
+    )
+    assert response.status_code == 400
+    assert "JSON" in response.json()["detail"]
+
+
+def test_webhook_command_missing_app_id_returns_400(
+    monkeypatch: Any,
+) -> None:
+    """Command interaction missing application_id should return 400."""
+    client = _make_noauth_client(monkeypatch)
+    response = client.post(
+        "/interactions",
+        json={
+            "type": DiscordInteractionType.APPLICATION_COMMAND.value,
+            "token": "token-abc",
+            "data": {
+                "name": "ask",
+                "options": [{"name": "question", "value": "Hi"}],
+            },
+            "member": {"user": {"username": "alice"}},
+        },
+    )
+    assert response.status_code == 400
+    assert "required interaction fields" in response.json()["detail"].lower()
+
+
+def test_webhook_command_missing_token_returns_400(
+    monkeypatch: Any,
+) -> None:
+    """Command interaction missing token should return 400."""
+    client = _make_noauth_client(monkeypatch)
+    response = client.post(
+        "/interactions",
+        json={
+            "type": DiscordInteractionType.APPLICATION_COMMAND.value,
+            "application_id": "app-123",
+            "data": {
+                "name": "ask",
+                "options": [{"name": "question", "value": "Hi"}],
+            },
+            "member": {"user": {"username": "alice"}},
+        },
+    )
+    assert response.status_code == 400
+    assert "required interaction fields" in response.json()["detail"].lower()
