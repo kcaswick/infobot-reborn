@@ -9,8 +9,14 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 
-_REPLY_RE = re.compile(r"<reply>(?P<content>.*?)</reply>", re.IGNORECASE | re.DOTALL)
-_ACTION_RE = re.compile(r"<action>(?P<content>.*?)</action>", re.IGNORECASE | re.DOTALL)
+_REPLY_RE = re.compile(
+    r"<reply>(?P<content>.*?)(?:</reply>|$)",
+    re.IGNORECASE | re.DOTALL,
+)
+_ACTION_RE = re.compile(
+    r"<action>(?P<content>.*?)(?:</action>|$)",
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 @dataclass(frozen=True)

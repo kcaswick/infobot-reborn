@@ -20,6 +20,24 @@ def test_format_response_action_tag() -> None:
     assert rendered == "* waves at bob"
 
 
+def test_format_response_bare_reply_tag() -> None:
+    """Legacy bare <reply> tags must not require a closing tag."""
+    context = FormatContext(username="alice", now=datetime(2026, 2, 6, 12, 0, 0))
+
+    rendered = format_response("<reply>Hello $who", context)
+
+    assert rendered == "Hello alice"
+
+
+def test_format_response_bare_action_tag() -> None:
+    """Legacy bare <action> tags must not require a closing tag."""
+    context = FormatContext(username="bob", now=datetime(2026, 2, 6, 12, 0, 0))
+
+    rendered = format_response("<action>waves at $who", context)
+
+    assert rendered == "* waves at bob"
+
+
 def test_format_response_pipe_selection() -> None:
     context = FormatContext(username="user", now=datetime(2026, 2, 6, 12, 0, 0))
     rng = random.Random(0)
@@ -82,6 +100,24 @@ def test_format_response_action_tag_with_prefix_text() -> None:
     assert rendered == "* waves hello"
 
 
+def test_format_response_bare_reply_tag_with_prefix_text() -> None:
+    """Text before a bare <reply> tag must be discarded."""
+    context = FormatContext(username="user", now=datetime(2026, 2, 6, 12, 0, 0))
+
+    rendered = format_response("Factoid: <reply>the value", context)
+
+    assert rendered == "the value"
+
+
+def test_format_response_bare_action_tag_with_prefix_text() -> None:
+    """Text before a bare <action> tag must be discarded."""
+    context = FormatContext(username="user", now=datetime(2026, 2, 6, 12, 0, 0))
+
+    rendered = format_response("emote: <action>waves hello", context)
+
+    assert rendered == "* waves hello"
+
+
 def test_format_response_reply_tag_case_insensitive() -> None:
     """<REPLY> and mixed-case tags must be matched case-insensitively."""
     context = FormatContext(username="user", now=datetime(2026, 2, 6, 12, 0, 0))
@@ -125,6 +161,26 @@ def test_format_response_pipe_outside_action_tag_not_selected() -> None:
     rendered = format_response("a|b|<action>dances</action>", context, rng=rng)
 
     assert rendered == "* dances"
+
+
+def test_format_response_bare_reply_tag_with_pipes() -> None:
+    """Pipe inside a bare <reply> tag must not trigger variant selection."""
+    context = FormatContext(username="user", now=datetime(2026, 2, 6, 12, 0, 0))
+    rng = random.Random(0)
+
+    rendered = format_response("<reply>a|b|c", context, rng=rng)
+
+    assert rendered == "a|b|c"
+
+
+def test_format_response_pipe_outside_bare_reply_tag_not_selected() -> None:
+    """Pipes outside a bare <reply> tag are ignored; bare tag content wins."""
+    context = FormatContext(username="user", now=datetime(2026, 2, 6, 12, 0, 0))
+    rng = random.Random(42)
+
+    rendered = format_response("fallback|<reply>tagged", context, rng=rng)
+
+    assert rendered == "tagged"
 
 
 def test_format_response_pipe_selection_no_tag() -> None:
