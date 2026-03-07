@@ -139,11 +139,18 @@ def resolve_runtime_config(env: Mapping[str, str] | None = None) -> RuntimeConfi
 
 
 def _configure_logging(log_level: str) -> None:
-    """Apply process logging configuration for worker execution."""
+    """Apply process logging configuration for worker execution.
+
+    Uses basicConfig for initial handler/format setup, then explicitly
+    sets the root logger level so subsequent calls with a different
+    level actually take effect (basicConfig is a no-op after first call).
+    """
+    resolved_level = getattr(logging, log_level.upper(), logging.INFO)
     logging.basicConfig(
-        level=getattr(logging, log_level.upper(), logging.INFO),
+        level=resolved_level,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
+    logging.getLogger().setLevel(resolved_level)
 
 
 def _build_llm_service(llm_base_url: str, llm_model: str) -> LlmService:

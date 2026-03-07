@@ -98,6 +98,7 @@ DiscordInteractionType = cast(Any, _MODAL_GLOBALS["DiscordInteractionType"])
 DiscordResponseType = cast(Any, _MODAL_GLOBALS["DiscordResponseType"])
 web_app_factory = cast(Any, _MODAL_GLOBALS["web_app"])
 authenticate = cast(Any, _MODAL_GLOBALS["authenticate"])
+_configure_logging = cast(Any, _MODAL_GLOBALS["_configure_logging"])
 
 
 def test_resolve_runtime_config_uses_defaults() -> None:
@@ -390,6 +391,25 @@ def test_webhook_command_missing_app_id_returns_400(
     )
     assert response.status_code == 400
     assert "required interaction fields" in response.json()["detail"].lower()
+
+
+def test_configure_logging_updates_level_on_subsequent_calls() -> None:
+    """Repeated _configure_logging calls must change the root logger level.
+
+    Regression: logging.basicConfig is a no-op after first invocation,
+    so per-request log level changes had no effect (bd-2ts).
+    """
+    import logging as _logging
+
+    _configure_logging("WARNING")
+    assert _logging.getLogger().level == _logging.WARNING
+
+    _configure_logging("DEBUG")
+    assert _logging.getLogger().level == _logging.DEBUG
+
+    # Restore to INFO to avoid polluting other tests
+    _configure_logging("INFO")
+    assert _logging.getLogger().level == _logging.INFO
 
 
 def test_webhook_command_missing_token_returns_400(
