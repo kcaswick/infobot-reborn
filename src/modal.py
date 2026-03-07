@@ -211,7 +211,7 @@ def authenticate(headers: Mapping[str, str], body: bytes) -> None:
 
     try:
         verify_key = VerifyKey(bytes.fromhex(public_key))
-    except Exception as e:
+    except (ValueError, Exception) as e:
         logging.error(f"DISCORD_PUBLIC_KEY is not valid hex: {e}")
         raise HTTPException(
             status_code=500,
