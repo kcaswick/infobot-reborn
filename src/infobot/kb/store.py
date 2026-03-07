@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from infobot.db.connection import DatabaseConnection
 
 logger = logging.getLogger(__name__)
+MAX_SEARCH_LIMIT = 100
 
 
 class FactoidExistsError(ValueError):
@@ -262,6 +263,7 @@ class FactoidStore:
             List of matching factoids.
         """
         query = query.strip().lower()
+        limit = max(0, min(limit, MAX_SEARCH_LIMIT))
 
         cursor = await self.db.execute(
             """

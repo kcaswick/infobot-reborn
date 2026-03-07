@@ -3,7 +3,7 @@
 import pytest
 
 from infobot.kb.factoid import Factoid, FactoidType
-from infobot.kb.store import FactoidStore
+from infobot.kb.store import MAX_SEARCH_LIMIT, FactoidStore
 
 
 async def test_create_factoid(store: FactoidStore):
@@ -225,6 +225,32 @@ async def test_search_with_limit(store: FactoidStore):
     results = await store.search("test", limit=5)
 
     assert len(results) == 5
+
+
+async def test_search_limit_is_clamped_to_maximum(store: FactoidStore):
+    """Test oversized search limits are clamped before query execution."""
+    for i in range(MAX_SEARCH_LIMIT + 20):
+        await store.create(
+            Factoid(key=f"test{i:03d}", value="value", factoid_type=FactoidType.IS)
+        )
+
+    results = await store.search("test", limit=MAX_SEARCH_LIMIT + 50)
+
+    assert len(results) == MAX_SEARCH_LIMIT
+    assert results[0].key == "test000"
+    assert results[-1].key == f"test{MAX_SEARCH_LIMIT - 1:03d}"
+
+
+async def test_search_negative_limit_returns_no_results(store: FactoidStore):
+    """Test negative search limits are clamped to zero results."""
+    for i in range(5):
+        await store.create(
+            Factoid(key=f"test{i:02d}", value="value", factoid_type=FactoidType.IS)
+        )
+
+    results = await store.search("test", limit=-1)
+
+    assert results == []
 
 
 async def test_count_factoids(store: FactoidStore):
