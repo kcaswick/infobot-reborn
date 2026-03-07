@@ -91,6 +91,7 @@ resolve_runtime_config = cast(Any, _MODAL_GLOBALS["resolve_runtime_config"])
 DEFAULT_LLM_BASE_URL = cast(str, _MODAL_GLOBALS["DEFAULT_LLM_BASE_URL"])
 DEFAULT_LLM_MODEL = cast(str, _MODAL_GLOBALS["DEFAULT_LLM_MODEL"])
 DEFAULT_LOG_LEVEL = cast(str, _MODAL_GLOBALS["DEFAULT_LOG_LEVEL"])
+DEFAULT_DATABASE_PATH = Path(cast(str, _MODAL_GLOBALS["DEFAULT_DATABASE_PATH"]))
 APP_CONFIG_PREFIX = cast(str, _MODAL_GLOBALS["APP_CONFIG_PREFIX"])
 RuntimeServiceCache = cast(Any, _MODAL_GLOBALS["RuntimeServiceCache"])
 RuntimeConfig = cast(Any, _MODAL_GLOBALS["RuntimeConfig"])
@@ -99,6 +100,7 @@ DiscordResponseType = cast(Any, _MODAL_GLOBALS["DiscordResponseType"])
 web_app_factory = cast(Any, _MODAL_GLOBALS["web_app"])
 authenticate = cast(Any, _MODAL_GLOBALS["authenticate"])
 _configure_logging = cast(Any, _MODAL_GLOBALS["_configure_logging"])
+ModalInteractionWorker = cast(Any, _MODAL_GLOBALS["ModalInteractionWorker"])
 
 
 def test_resolve_runtime_config_uses_defaults() -> None:
@@ -108,6 +110,7 @@ def test_resolve_runtime_config_uses_defaults() -> None:
     assert config.llm_base_url == DEFAULT_LLM_BASE_URL
     assert config.llm_model == DEFAULT_LLM_MODEL
     assert config.log_level == DEFAULT_LOG_LEVEL
+    assert config.database_path == DEFAULT_DATABASE_PATH
 
 
 def test_resolve_runtime_config_uses_legacy_env_fallback() -> None:
@@ -117,12 +120,14 @@ def test_resolve_runtime_config_uses_legacy_env_fallback() -> None:
             "LLM_BASE_URL": "http://env.example/v1",
             "LLM_MODEL": "env-model",
             "LOG_LEVEL": "debug",
+            "DATABASE_PATH": "/tmp/env.db",
         }
     )
 
     assert config.llm_base_url == "http://env.example/v1"
     assert config.llm_model == "env-model"
     assert config.log_level == "DEBUG"
+    assert config.database_path == Path("/tmp/env.db")
 
 
 def test_resolve_runtime_config_prefers_app_config_namespace() -> None:
@@ -135,12 +140,15 @@ def test_resolve_runtime_config_prefers_app_config_namespace() -> None:
             "LLM_MODEL": "env-model",
             f"{APP_CONFIG_PREFIX}LOG_LEVEL": "warning",
             "LOG_LEVEL": "debug",
+            f"{APP_CONFIG_PREFIX}DATABASE_PATH": "/tmp/secret.db",
+            "DATABASE_PATH": "/tmp/env.db",
         }
     )
 
     assert config.llm_base_url == "http://secret.example/v1"
     assert config.llm_model == "secret-model"
     assert config.log_level == "WARNING"
+    assert config.database_path == Path("/tmp/secret.db")
 
 
 def test_resolve_runtime_config_blank_secret_value_falls_back() -> None:
@@ -153,12 +161,15 @@ def test_resolve_runtime_config_blank_secret_value_falls_back() -> None:
             "LLM_MODEL": "env-model",
             f"{APP_CONFIG_PREFIX}LOG_LEVEL": "   ",
             "LOG_LEVEL": "error",
+            f"{APP_CONFIG_PREFIX}DATABASE_PATH": "   ",
+            "DATABASE_PATH": "/tmp/env.db",
         }
     )
 
     assert config.llm_base_url == "http://env.example/v1"
     assert config.llm_model == "env-model"
     assert config.log_level == "ERROR"
+    assert config.database_path == Path("/tmp/env.db")
 
 
 def test_resolve_runtime_config_invalid_log_level_uses_default() -> None:
@@ -231,6 +242,7 @@ def test_webhook_command_returns_deferred_and_spawns_worker(monkeypatch: Any) ->
         llm_base_url="http://runtime.example/v1",
         llm_model="runtime-model",
         log_level="DEBUG",
+        database_path=Path("/tmp/runtime.db"),
     )
 
     def fake_spawn(**kwargs: str) -> None:
@@ -282,7 +294,90 @@ def test_webhook_command_returns_deferred_and_spawns_worker(monkeypatch: Any) ->
         "llm_base_url": "http://runtime.example/v1",
         "llm_model": "runtime-model",
         "log_level": "DEBUG",
+        "database_path": "/tmp/runtime.db",
     }
+
+
+@pytest.mark.asyncio
+async def test_process_and_reply_uses_runtime_database_path(
+    monkeypatch: Any,
+) -> None:
+    """Worker DB connections should honor the resolved runtime database path."""
+
+    captured: dict[str, Any] = {}
+
+    class FakeDatabaseConnection:
+        def __init__(self, path: Path) -> None:
+            captured["db_path"] = path
+
+        async def connect(self) -> None:
+            captured["connected"] = True
+
+        async def close(self) -> None:
+            captured["closed"] = True
+
+    async def fake_initialize_schema(_db: object) -> None:
+        captured["schema_initialized"] = True
+
+    class FakeMessageHandler:
+        def __init__(self, db: object, llm_service: object) -> None:
+            captured["handler_args"] = (db, llm_service)
+
+        async def handle_message(self, content: str, username: str) -> str:
+            captured["message"] = (content, username)
+            return "Processed"
+
+    async def fake_send_to_discord(
+        payload: dict[str, str],
+        app_id: str,
+        interaction_token: str,
+    ) -> None:
+        captured["discord"] = (payload, app_id, interaction_token)
+
+    worker = ModalInteractionWorker()
+    worker._services = SimpleNamespace(
+        get_llm_service=lambda llm_base_url, llm_model: (llm_base_url, llm_model)
+    )
+
+    method_globals = worker.process_and_reply.__globals__
+    monkeypatch.setitem(method_globals, "send_to_discord", fake_send_to_discord)
+
+    fake_db_module = types.SimpleNamespace(
+        DatabaseConnection=FakeDatabaseConnection,
+        initialize_schema=fake_initialize_schema,
+    )
+    fake_message_handler_module = types.SimpleNamespace(
+        MessageHandler=FakeMessageHandler,
+    )
+
+    with patch.dict(
+        sys.modules,
+        {
+            "infobot.db": fake_db_module,
+            "infobot.message_handler": fake_message_handler_module,
+        },
+    ):
+        await worker.process_and_reply(
+            content="What is python?",
+            username="alice",
+            app_id="app-123",
+            interaction_token="token-abc",
+            llm_base_url="http://runtime.example/v1",
+            llm_model="runtime-model",
+            log_level="DEBUG",
+            database_path="/tmp/runtime.db",
+        )
+
+    assert captured["db_path"] == Path("/tmp/runtime.db")
+    assert captured["connected"] is True
+    assert captured["schema_initialized"] is True
+    assert captured["message"] == ("What is python?", "alice")
+    assert captured["discord"] == (
+        {"content": "Processed"},
+        "app-123",
+        "token-abc",
+    )
+    assert captured["closed"] is True
 
 
 def test_authenticate_malformed_signature_hex_returns_401(monkeypatch: Any) -> None:

@@ -81,6 +81,7 @@ APP_CONFIG_PREFIX = "APP_CONFIG_"
 DEFAULT_LLM_BASE_URL = "http://localhost:11434/v1"
 DEFAULT_LLM_MODEL = "qwen3:1.7b"
 DEFAULT_LOG_LEVEL = "INFO"
+DEFAULT_DATABASE_PATH = "/data/infobot.db"
 
 
 @dataclass(frozen=True)
@@ -90,6 +91,7 @@ class RuntimeConfig:
     llm_base_url: str
     llm_model: str
     log_level: str
+    database_path: Path
 
 
 def _resolve_config_value(key: str, default: str, env: Mapping[str, str]) -> str:
@@ -128,6 +130,13 @@ def resolve_runtime_config(env: Mapping[str, str] | None = None) -> RuntimeConfi
         DEFAULT_LOG_LEVEL,
         runtime_env,
     ).upper()
+    database_path = Path(
+        _resolve_config_value(
+            "DATABASE_PATH",
+            DEFAULT_DATABASE_PATH,
+            runtime_env,
+        )
+    )
     if not hasattr(logging, log_level):
         log_level = DEFAULT_LOG_LEVEL
 
@@ -135,6 +144,7 @@ def resolve_runtime_config(env: Mapping[str, str] | None = None) -> RuntimeConfi
         llm_base_url=llm_base_url,
         llm_model=llm_model,
         log_level=log_level,
+        database_path=database_path,
     )
 
 
@@ -304,6 +314,7 @@ class ModalInteractionWorker:
         llm_base_url: str,
         llm_model: str,
         log_level: str,
+        database_path: str,
     ) -> None:
         """Process message through message handler and reply to Discord."""
         _configure_logging(log_level)
@@ -314,7 +325,7 @@ class ModalInteractionWorker:
         db: DatabaseConnection | None = None
 
         try:
-            db_path = Path("/data/infobot.db")
+            db_path = Path(database_path)
             db = DatabaseConnection(db_path)
             await db.connect()
             await initialize_schema(db)
@@ -493,6 +504,7 @@ def web_app():
                 llm_base_url=runtime_config.llm_base_url,
                 llm_model=runtime_config.llm_model,
                 log_level=runtime_config.log_level,
+                database_path=str(runtime_config.database_path),
             )
 
             # Return deferred response immediately
