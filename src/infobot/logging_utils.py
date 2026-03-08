@@ -1,4 +1,4 @@
-"""Logging utilities for sanitizing sensitive data."""
+"""Logging utilities for building bounded log previews."""
 
 from __future__ import annotations
 
@@ -6,17 +6,19 @@ import re
 
 
 def sanitize_message_preview(message: str, max_len: int = 50) -> str:
-    """Sanitize a message for safe debug logging.
+    """Build a normalized, truncated preview for debug logging.
 
-    Truncates long messages and normalizes whitespace to prevent log
-    injection and PII exposure while preserving useful debugging context.
+    Truncates long messages and normalizes whitespace to reduce accidental
+    log exposure and prevent multiline log injection while preserving useful
+    debugging context. This is not a full PII scrubber and does not
+    guarantee that sensitive content is removed from the retained preview.
 
     Args:
         message: The message content to sanitize.
         max_len: Maximum length of the preview (default 50).
 
     Returns:
-        Sanitized message preview safe for debug logging.
+        Normalized, truncated message preview for debug logging.
 
     Examples:
         >>> sanitize_message_preview("Hello world")
@@ -26,10 +28,11 @@ def sanitize_message_preview(message: str, max_len: int = 50) -> str:
         >>> sanitize_message_preview("line1\\nline2\\nline3")
         'line1 line2 line3'
     """
-    # Normalize whitespace to single spaces (prevents log injection from newlines)
+    # Normalize whitespace to single spaces to avoid multiline log injection.
     sanitized = re.sub(r"\s+", " ", message).strip()
 
-    # Truncate if needed
+    # Truncate to a bounded preview length. This reduces exposure surface but
+    # does not guarantee that sensitive content is removed from the preview.
     if len(sanitized) <= max_len:
         return sanitized
 

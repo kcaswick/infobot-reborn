@@ -4,6 +4,8 @@ import logging
 from datetime import datetime
 from typing import TYPE_CHECKING
 
+import aiosqlite
+
 from infobot.kb.factoid import Factoid, FactoidType
 
 if TYPE_CHECKING:
@@ -49,34 +51,33 @@ class FactoidStore:
         Raises:
             FactoidExistsError: If factoid with same key and type already exists.
         """
-        # Check if factoid already exists
-        existing = await self.get(factoid.key, factoid.factoid_type)
-        if existing is not None:
-            raise FactoidExistsError(
-                f"Factoid '{factoid.key}' ({factoid.factoid_type.value}) "
-                "already exists"
-            )
-
         # Set timestamps
         now = datetime.utcnow()
         factoid.created_at = now
         factoid.updated_at = now
 
-        # Insert into database
-        await self.db.execute(
-            """
-            INSERT INTO factoids (key, value, type, created_at, updated_at, source)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (
-                factoid.key,
-                factoid.value,
-                factoid.factoid_type.value,
-                factoid.created_at.isoformat(),
-                factoid.updated_at.isoformat(),
-                factoid.source,
-            ),
-        )
+        try:
+            await self.db.execute(
+                """
+                INSERT INTO factoids (key, value, type, created_at, updated_at, source)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    factoid.key,
+                    factoid.value,
+                    factoid.factoid_type.value,
+                    factoid.created_at.isoformat(),
+                    factoid.updated_at.isoformat(),
+                    factoid.source,
+                ),
+            )
+        except aiosqlite.IntegrityError as exc:
+            await self.db.rollback()
+            raise FactoidExistsError(
+                f"Factoid '{factoid.key}' ({factoid.factoid_type.value}) "
+                "already exists"
+            ) from exc
+
         await self.db.commit()
 
         logger.info(f"Created factoid: {factoid.key} ({factoid.factoid_type.value})")
@@ -257,12 +258,14 @@ class FactoidStore:
 
         Args:
             query: Search query (case-insensitive substring match).
-            limit: Maximum number of results to return.
+            limit: Requested maximum number of results to return. Clamped to
+                the range ``0..MAX_SEARCH_LIMIT`` before query execution.
 
         Returns:
             List of matching factoids.
         """
         query = query.strip().lower()
+        # Bound caller-provided limits before executing the query and fetchall.
         limit = max(0, min(limit, MAX_SEARCH_LIMIT))
 
         cursor = await self.db.execute(
