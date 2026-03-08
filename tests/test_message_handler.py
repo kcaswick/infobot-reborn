@@ -186,3 +186,57 @@ async def test_message_handler_unknown_factoid(
     # Assert: Should get "don't know" response
     assert "don't know" in response.lower()
     assert "cobol" in response.lower()
+
+
+@pytest.mark.asyncio
+async def test_message_handler_replace_requires_existing_factoid(
+    db_conn: DatabaseConnection,
+) -> None:
+    """Test that replace requests fail clearly when no factoid exists."""
+    handler = MessageHandler(db=db_conn, llm_service=None)
+
+    response = await handler.handle_message(
+        "no, python is a snake",
+        username="testuser",
+    )
+
+    assert "don't know anything about python yet" in response.lower()
+    assert "can't replace it" in response.lower()
+
+    from infobot.kb.store import FactoidStore
+
+    store = FactoidStore(db_conn)
+    factoid = await store.get("python", FactoidType.IS)
+    assert factoid is None
+
+
+@pytest.mark.asyncio
+async def test_message_handler_set_updates_existing_factoid(
+    db_conn: DatabaseConnection,
+) -> None:
+    """Test that SET still updates an existing factoid."""
+    from infobot.kb.store import FactoidStore
+
+    store = FactoidStore(db_conn)
+    await store.create(
+        Factoid(
+            key="python",
+            value="a language",
+            factoid_type=FactoidType.IS,
+            source="original",
+        )
+    )
+    handler = MessageHandler(db=db_conn, llm_service=None)
+
+    response = await handler.handle_message(
+        "python is a snake",
+        username="testuser",
+    )
+
+    assert "ok" in response.lower()
+    assert "python is a snake" in response.lower()
+
+    updated = await store.get("python", FactoidType.IS)
+    assert updated is not None
+    assert updated.value == "a snake"
+    assert updated.source == "testuser"

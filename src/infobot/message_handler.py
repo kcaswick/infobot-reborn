@@ -142,9 +142,10 @@ class MessageHandler:
                 )
                 return self._format_response(response, username)
 
-            elif intent.modification_type == ModificationType.REPLACE or (
-                intent.modification_type == ModificationType.SET and existing
-            ):
+            elif existing and intent.modification_type in {
+                ModificationType.REPLACE,
+                ModificationType.SET,
+            }:
                 # Replace existing factoid
                 existing.value = intent.value
                 existing.source = username
@@ -156,6 +157,13 @@ class MessageHandler:
                 response = (
                     f"OK, I'll remember that {intent.key} {factoid_type.value} "
                     f"{intent.value}."
+                )
+                return self._format_response(response, username)
+
+            elif intent.modification_type == ModificationType.REPLACE:
+                response = (
+                    f"I don't know anything about {intent.key} yet, "
+                    "so I can't replace it."
                 )
                 return self._format_response(response, username)
 
