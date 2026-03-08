@@ -202,6 +202,12 @@ tests/                    # pytest test suite
 - Never stage or commit scratch artifacts from `temp/` or `/tmp/`.
 - Keep canonical assignment/completion state in beads and GitHub PR comments.
 
+### PR Review Thread Resolution
+- AI agents may draft and post GitHub review-thread replies with evidence.
+- AI agents must not mark GitHub review threads as resolved unless they are acting as the reviewer/thread author who raised the concern, or as the repo owner.
+- Review-thread resolution belongs to the reviewer/thread author who raised the concern, or to the repo owner, regardless of whether that actor is human or AI.
+- When a thread is addressed or deferred, agents should reply with evidence or the follow-up bead/issue and then leave the thread open for reviewer/repo-owner resolution.
+
 <!-- br-agent-instructions-v1 -->
 
 ---
