@@ -220,13 +220,22 @@ def authenticate(headers: Mapping[str, str], body: bytes) -> None:
         raise HTTPException(status_code=500, detail="DISCORD_PUBLIC_KEY not configured")
 
     try:
-        verify_key = VerifyKey(bytes.fromhex(public_key))
-    except (ValueError, Exception) as e:
+        public_key_bytes = bytes.fromhex(public_key)
+    except ValueError as e:
         logging.error(f"DISCORD_PUBLIC_KEY is not valid hex: {e}")
         raise HTTPException(
             status_code=500,
             detail="DISCORD_PUBLIC_KEY misconfigured",
-        )
+        ) from e
+
+    try:
+        verify_key = VerifyKey(public_key_bytes)
+    except (TypeError, ValueError) as e:
+        logging.error(f"DISCORD_PUBLIC_KEY is not a valid Ed25519 key: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="DISCORD_PUBLIC_KEY misconfigured",
+        ) from e
 
     normalized_headers = {key.lower(): value for key, value in headers.items()}
     signature = normalized_headers.get("x-signature-ed25519")

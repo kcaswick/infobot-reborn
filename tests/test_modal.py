@@ -420,6 +420,49 @@ def test_authenticate_malformed_public_key_hex_returns_500(
     assert "misconfigured" in exc_info.value.detail.lower()
 
 
+def test_authenticate_invalid_public_key_bytes_returns_500(
+    monkeypatch: Any,
+) -> None:
+    """Wrong-length public key bytes should still be treated as misconfigured."""
+    from fastapi.exceptions import HTTPException
+
+    monkeypatch.setenv("DISCORD_PUBLIC_KEY", "aa" * 31)
+
+    headers = {
+        "x-signature-ed25519": "aa" * 64,
+        "x-signature-timestamp": "1234567890",
+    }
+
+    with pytest.raises(HTTPException) as exc_info:
+        authenticate(headers, b'{"type":1}')
+
+    assert exc_info.value.status_code == 500
+    assert "misconfigured" in exc_info.value.detail.lower()
+
+
+def test_authenticate_unexpected_verify_key_error_propagates(
+    monkeypatch: Any,
+) -> None:
+    """Unexpected VerifyKey failures should not be relabeled as misconfiguration."""
+    import nacl.signing
+
+    monkeypatch.setenv("DISCORD_PUBLIC_KEY", "aa" * 32)
+
+    class ExplodingVerifyKey:
+        def __init__(self, _public_key: bytes) -> None:
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(nacl.signing, "VerifyKey", ExplodingVerifyKey)
+
+    headers = {
+        "x-signature-ed25519": "aa" * 64,
+        "x-signature-timestamp": "1234567890",
+    }
+
+    with pytest.raises(RuntimeError, match="boom"):
+        authenticate(headers, b'{"type":1}')
+
+
 def _make_noauth_client(monkeypatch: Any) -> TestClient:
     """Build a TestClient with authentication disabled."""
     web_app_globals = web_app_factory.__globals__
