@@ -21,10 +21,11 @@
 ## Local Development Prerequisites
 - **Python 3.11+** (managed via `.python-version`)
 - **uv** for dependency management
-- **Discord application** for the local gateway bot
-  - If you run `python src/main.py`, enable the **Message Content Intent**
-    under **Privileged Gateway Intents** in the Discord Developer Portal.
-    The local `discord.py` bot cannot read server messages without it.
+- **Local Discord setup**
+  - `README.md` is the source of truth for human-facing local bot setup,
+    including the required **Message Content Intent** for `python src/main.py`.
+  - Keep setup details in `README.md`; add notes here only when they are
+    specific to coding agents or automation.
 - **ollama** for local LLM inference (provides OpenAI-compatible endpoint)
   - Install: https://ollama.com
   - Pull a small model for dev: `ollama pull qwen3:1.7b`

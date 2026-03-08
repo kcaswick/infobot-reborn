@@ -58,10 +58,14 @@ Copy `.env.example` to `.env` and set required values:
 python src/main.py
 ```
 
-Before running the local gateway bot, enable the **Message Content Intent**
-for your bot in the Discord Developer Portal under **Privileged Gateway
-Intents**. This is required for `src/main.py` to read server messages and is
-not needed for the Modal webhook deployment path.
+Before running the local gateway bot:
+
+- Enable the **Message Content Intent** for your bot in the Discord Developer
+  Portal under **Privileged Gateway Intents**.
+- Set `DISCORD_BOT_TOKEN` in `.env` for the bot application you want to run.
+
+This is required for `python src/main.py` to read server messages. It is not
+needed for the Modal webhook deployment path.
 
 ### Deploying to Modal
 
