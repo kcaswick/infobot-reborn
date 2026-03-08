@@ -3,7 +3,7 @@
 import pytest
 
 from infobot.kb.factoid import Factoid, FactoidType
-from infobot.kb.store import MAX_SEARCH_LIMIT, FactoidStore
+from infobot.kb.store import MAX_SEARCH_LIMIT, FactoidExistsError, FactoidStore
 
 
 async def test_create_factoid(store: FactoidStore):
@@ -31,7 +31,27 @@ async def test_create_duplicate_raises_error(store: FactoidStore):
     # Try to create duplicate
     duplicate = Factoid(key="test", value="value2", factoid_type=FactoidType.IS)
 
-    with pytest.raises(ValueError, match="already exists"):
+    with pytest.raises(FactoidExistsError, match="already exists"):
+        await store.create(duplicate)
+
+
+async def test_create_duplicate_after_normalization_raises_error(store: FactoidStore):
+    """Test duplicate detection still uses normalized factoid keys."""
+    await store.create(
+        Factoid(
+            key="  Test Key  ",
+            value="value1",
+            factoid_type=FactoidType.IS,
+        )
+    )
+
+    duplicate = Factoid(
+        key="test key",
+        value="value2",
+        factoid_type=FactoidType.IS,
+    )
+
+    with pytest.raises(FactoidExistsError, match=r"Factoid 'test key' \(is\)"):
         await store.create(duplicate)
 
 
