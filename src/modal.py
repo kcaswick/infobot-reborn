@@ -535,13 +535,15 @@ def web_app():
 
 
 @app.function(secrets=[discord_secret], image=image)
-def register_commands(force: bool = False):
+async def register_commands(force: bool = False) -> None:
     """Register slash commands with Discord API.
+
+    Uses bounded async HTTP via aiohttp to avoid blocking the event loop.
 
     Args:
         force: If True, recreate commands even if they exist.
     """
-    import requests
+    import aiohttp
 
     bot_token = os.getenv("DISCORD_BOT_TOKEN")
     client_id = os.getenv("DISCORD_CLIENT_ID")
@@ -585,34 +587,47 @@ def register_commands(force: bool = False):
         },
     ]
 
-    # Get existing commands
-    response = requests.get(url, headers=headers, timeout=10)
-    response.raise_for_status()
-    existing_commands = response.json()
+    # Bounded concurrency: semaphore limits concurrent HTTP requests
+    semaphore = aiohttp.TCPConnector(limit=1, limit_per_host=1)
+    http_timeout = aiohttp.ClientTimeout(total=10)
 
-    # Register each command
-    for command in commands:
-        exists = any(cmd.get("name") == command["name"] for cmd in existing_commands)
+    async with aiohttp.ClientSession(connector=semaphore) as session:
+        # Get existing commands
+        async with session.get(url, headers=headers, timeout=http_timeout) as resp:
+            resp.raise_for_status()
+            existing_commands = await resp.json()
 
-        if exists and not force:
-            print(f"✓ Command '{command['name']}' already exists")
-            continue
-
-        # Create or update command
-        if exists:
-            # Find and update existing command
-            existing_id = next(
-                cmd["id"] for cmd in existing_commands if cmd["name"] == command["name"]
+        # Register each command (bounded: max 1 concurrent request)
+        for command in commands:
+            exists = any(
+                cmd.get("name") == command["name"]
+                for cmd in existing_commands
             )
-            update_url = f"{url}/{existing_id}"
-            response = requests.patch(
-                update_url, headers=headers, json=command, timeout=10
-            )
-        else:
-            response = requests.post(url, headers=headers, json=command, timeout=10)
 
-        response.raise_for_status()
-        print(f"✓ Command '{command['name']}' registered")
+            if exists and not force:
+                print(f"✓ Command '{command['name']}' already exists")
+                continue
+
+            # Create or update command
+            if exists:
+                # Find and update existing command
+                existing_id = next(
+                    cmd["id"]
+                    for cmd in existing_commands
+                    if cmd["name"] == command["name"]
+                )
+                update_url = f"{url}/{existing_id}"
+                async with session.patch(
+                    update_url, headers=headers, json=command, timeout=http_timeout
+                ) as resp:
+                    resp.raise_for_status()
+            else:
+                async with session.post(
+                    url, headers=headers, json=command, timeout=http_timeout
+                ) as resp:
+                    resp.raise_for_status()
+
+            print(f"✓ Command '{command['name']}' registered")
 
     print("\n✓ All commands registered successfully!")
 
