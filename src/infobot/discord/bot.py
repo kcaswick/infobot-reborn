@@ -149,7 +149,9 @@ class InfobotBot(commands.Bot):
             await ctx.send("Please provide a question!")
             return
 
-        logger.debug(f"Command from {ctx.author}: {question}")
+        # Security: Use sanitized preview to avoid logging PII/sensitive content
+        preview = sanitize_message_preview(question)
+        logger.debug(f"Command from {ctx.author}: {preview}")
 
         try:
             response = await self._process_command_input(ctx, question)
@@ -175,7 +177,9 @@ class InfobotBot(commands.Bot):
             await ctx.send("Please provide a factoid (format: 'key is value')!")
             return
 
-        logger.debug(f"Teach command from {ctx.author}: {factoid}")
+        # Security: Use sanitized preview to avoid logging PII/sensitive content
+        preview = sanitize_message_preview(factoid)
+        logger.debug(f"Teach command from {ctx.author}: {preview}")
 
         try:
             response = await self._process_command_input(ctx, factoid)
