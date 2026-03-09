@@ -101,6 +101,144 @@ web_app_factory = cast(Any, _MODAL_GLOBALS["web_app"])
 authenticate = cast(Any, _MODAL_GLOBALS["authenticate"])
 _configure_logging = cast(Any, _MODAL_GLOBALS["_configure_logging"])
 ModalInteractionWorker = cast(Any, _MODAL_GLOBALS["ModalInteractionWorker"])
+register_commands = cast(Any, _MODAL_GLOBALS["register_commands"])
+
+
+class _FakeAiohttpResponse:
+    """Minimal async response/context manager for register_commands tests."""
+
+    def __init__(
+        self,
+        payload: object | None = None,
+        error: Exception | None = None,
+    ) -> None:
+        self._payload = payload
+        self._error = error
+
+    async def __aenter__(self) -> _FakeAiohttpResponse:
+        return self
+
+    async def __aexit__(
+        self,
+        _exc_type: object,
+        _exc: object,
+        _tb: object,
+    ) -> bool:
+        return False
+
+    def raise_for_status(self) -> None:
+        """Raise the configured error, if any."""
+        if self._error is not None:
+            raise self._error
+
+    async def json(self) -> object:
+        """Return the configured JSON payload."""
+        return self._payload
+
+
+class _FakeAiohttpModule:
+    """Tiny aiohttp stub for exercising register_commands branches."""
+
+    def __init__(self, responses: dict[str, list[_FakeAiohttpResponse]]) -> None:
+        self._responses = {method: list(items) for method, items in responses.items()}
+        self.calls: list[dict[str, object]] = []
+        self.connector_kwargs: dict[str, object] | None = None
+        self.session_connector: object | None = None
+
+        outer = self
+
+        class TCPConnector:
+            def __init__(self, **kwargs: object) -> None:
+                outer.connector_kwargs = dict(kwargs)
+                self.limit = kwargs.get("limit")
+                self.limit_per_host = kwargs.get("limit_per_host")
+
+        class ClientTimeout:
+            def __init__(self, *, total: float | None = None) -> None:
+                self.total = total
+
+        class ClientSession:
+            def __init__(self, *, connector: object | None = None, **_kwargs: object):
+                outer.session_connector = connector
+
+            async def __aenter__(self) -> ClientSession:
+                return self
+
+            async def __aexit__(
+                self,
+                _exc_type: object,
+                _exc: object,
+                _tb: object,
+            ) -> bool:
+                return False
+
+            def _request(
+                self,
+                method: str,
+                url: str,
+                *,
+                headers: dict[str, str] | None = None,
+                json: dict[str, object] | None = None,
+                timeout: object | None = None,
+            ) -> _FakeAiohttpResponse:
+                outer.calls.append(
+                    {
+                        "method": method,
+                        "url": url,
+                        "headers": headers,
+                        "json": json,
+                        "timeout": timeout,
+                    }
+                )
+                response_queue = outer._responses.setdefault(method, [])
+                if not response_queue:
+                    raise AssertionError(f"Missing fake aiohttp response for {method}")
+                return response_queue.pop(0)
+
+            def get(
+                self,
+                url: str,
+                *,
+                headers: dict[str, str] | None = None,
+                timeout: object | None = None,
+            ) -> _FakeAiohttpResponse:
+                return self._request("GET", url, headers=headers, timeout=timeout)
+
+            def patch(
+                self,
+                url: str,
+                *,
+                headers: dict[str, str] | None = None,
+                json: dict[str, object] | None = None,
+                timeout: object | None = None,
+            ) -> _FakeAiohttpResponse:
+                return self._request(
+                    "PATCH",
+                    url,
+                    headers=headers,
+                    json=json,
+                    timeout=timeout,
+                )
+
+            def post(
+                self,
+                url: str,
+                *,
+                headers: dict[str, str] | None = None,
+                json: dict[str, object] | None = None,
+                timeout: object | None = None,
+            ) -> _FakeAiohttpResponse:
+                return self._request(
+                    "POST",
+                    url,
+                    headers=headers,
+                    json=json,
+                    timeout=timeout,
+                )
+
+        self.TCPConnector = TCPConnector
+        self.ClientTimeout = ClientTimeout
+        self.ClientSession = ClientSession
 
 
 def test_resolve_runtime_config_uses_defaults() -> None:
@@ -378,6 +516,185 @@ async def test_process_and_reply_uses_runtime_database_path(
         "token-abc",
     )
     assert captured["closed"] is True
+
+
+@pytest.mark.asyncio
+async def test_register_commands_skips_existing_commands_without_force(
+    monkeypatch: Any,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Existing commands should be reported and skipped when force is false."""
+    fake_aiohttp = _FakeAiohttpModule(
+        {
+            "GET": [
+                _FakeAiohttpResponse(
+                    [
+                        {"id": "ask-id", "name": "ask"},
+                        {"id": "teach-id", "name": "teach"},
+                    ]
+                )
+            ]
+        }
+    )
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "token-123")
+    monkeypatch.setenv("DISCORD_CLIENT_ID", "client-456")
+
+    with patch.dict(sys.modules, {"aiohttp": fake_aiohttp}):
+        await register_commands(force=False)
+
+    captured = capsys.readouterr()
+    assert fake_aiohttp.connector_kwargs == {"limit": 1, "limit_per_host": 1}
+    assert getattr(fake_aiohttp.session_connector, "limit", None) == 1
+    assert getattr(fake_aiohttp.session_connector, "limit_per_host", None) == 1
+    assert [call["method"] for call in fake_aiohttp.calls] == ["GET"]
+    assert fake_aiohttp.calls[0]["url"] == (
+        "https://discord.com/api/v10/applications/client-456/commands"
+    )
+    assert getattr(fake_aiohttp.calls[0]["timeout"], "total", None) == 10
+    assert "Command 'ask' already exists" in captured.out
+    assert "Command 'teach' already exists" in captured.out
+    assert "All commands registered successfully!" in captured.out
+
+
+@pytest.mark.asyncio
+async def test_register_commands_force_updates_existing_commands(
+    monkeypatch: Any,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Force mode should PATCH existing commands instead of skipping them."""
+    fake_aiohttp = _FakeAiohttpModule(
+        {
+            "GET": [
+                _FakeAiohttpResponse(
+                    [
+                        {"id": "ask-id", "name": "ask"},
+                        {"id": "teach-id", "name": "teach"},
+                    ]
+                )
+            ],
+            "PATCH": [_FakeAiohttpResponse(), _FakeAiohttpResponse()],
+        }
+    )
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "token-123")
+    monkeypatch.setenv("DISCORD_CLIENT_ID", "client-456")
+
+    with patch.dict(sys.modules, {"aiohttp": fake_aiohttp}):
+        await register_commands(force=True)
+
+    captured = capsys.readouterr()
+    assert [call["method"] for call in fake_aiohttp.calls] == [
+        "GET",
+        "PATCH",
+        "PATCH",
+    ]
+    assert fake_aiohttp.calls[1]["url"].endswith("/commands/ask-id")
+    assert fake_aiohttp.calls[1]["json"] == {
+        "name": "ask",
+        "description": "Ask the bot a question",
+        "options": [
+            {
+                "name": "question",
+                "description": "Your question",
+                "type": 3,
+                "required": True,
+            }
+        ],
+    }
+    assert fake_aiohttp.calls[2]["url"].endswith("/commands/teach-id")
+    assert fake_aiohttp.calls[2]["json"] == {
+        "name": "teach",
+        "description": "Teach the bot a new factoid",
+        "options": [
+            {
+                "name": "factoid",
+                "description": "The factoid to teach (format: 'key is value')",
+                "type": 3,
+                "required": True,
+            }
+        ],
+    }
+    assert all(
+        getattr(call["timeout"], "total", None) == 10
+        for call in fake_aiohttp.calls
+    )
+    assert "Command 'ask' registered" in captured.out
+    assert "Command 'teach' registered" in captured.out
+
+
+@pytest.mark.asyncio
+async def test_register_commands_creates_missing_commands(
+    monkeypatch: Any,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Missing commands should be created with POST requests."""
+    fake_aiohttp = _FakeAiohttpModule(
+        {
+            "GET": [_FakeAiohttpResponse([])],
+            "POST": [_FakeAiohttpResponse(), _FakeAiohttpResponse()],
+        }
+    )
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "token-123")
+    monkeypatch.setenv("DISCORD_CLIENT_ID", "client-456")
+
+    with patch.dict(sys.modules, {"aiohttp": fake_aiohttp}):
+        await register_commands(force=False)
+
+    captured = capsys.readouterr()
+    assert [call["method"] for call in fake_aiohttp.calls] == [
+        "GET",
+        "POST",
+        "POST",
+    ]
+    assert fake_aiohttp.calls[1]["url"] == (
+        "https://discord.com/api/v10/applications/client-456/commands"
+    )
+    assert fake_aiohttp.calls[1]["json"] == {
+        "name": "ask",
+        "description": "Ask the bot a question",
+        "options": [
+            {
+                "name": "question",
+                "description": "Your question",
+                "type": 3,
+                "required": True,
+            }
+        ],
+    }
+    assert fake_aiohttp.calls[2]["json"] == {
+        "name": "teach",
+        "description": "Teach the bot a new factoid",
+        "options": [
+            {
+                "name": "factoid",
+                "description": "The factoid to teach (format: 'key is value')",
+                "type": 3,
+                "required": True,
+            }
+        ],
+    }
+    assert "Command 'ask' registered" in captured.out
+    assert "Command 'teach' registered" in captured.out
+
+
+@pytest.mark.asyncio
+async def test_register_commands_propagates_http_errors(
+    monkeypatch: Any,
+) -> None:
+    """HTTP failures should propagate instead of being swallowed."""
+    fake_aiohttp = _FakeAiohttpModule(
+        {
+            "GET": [_FakeAiohttpResponse([])],
+            "POST": [_FakeAiohttpResponse(error=RuntimeError("discord boom"))],
+        }
+    )
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "token-123")
+    monkeypatch.setenv("DISCORD_CLIENT_ID", "client-456")
+
+    with patch.dict(sys.modules, {"aiohttp": fake_aiohttp}):
+        with pytest.raises(RuntimeError, match="discord boom"):
+            await register_commands(force=False)
+
+    assert [call["method"] for call in fake_aiohttp.calls] == ["GET", "POST"]
 
 
 def test_authenticate_malformed_signature_hex_returns_401(monkeypatch: Any) -> None:
