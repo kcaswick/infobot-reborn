@@ -458,6 +458,13 @@ def web_app():
                         detail="Command options must contain JSON objects",
                     )
                 content = first_option.get("value")
+                if content is not None and not isinstance(content, str):
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Command option value must be a JSON string",
+                    )
+                if isinstance(content, str):
+                    content = content.strip()
 
             if not content:
                 return {

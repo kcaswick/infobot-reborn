@@ -587,6 +587,16 @@ def test_webhook_rejects_non_object_json_root(
                 "type": DiscordInteractionType.APPLICATION_COMMAND.value,
                 "application_id": "app-123",
                 "token": "token-abc",
+                "data": {"name": "ask", "options": [{"name": "question", "value": []}]},
+                "member": {"user": {"username": "alice"}},
+            },
+            "command option value must be a json string",
+        ),
+        (
+            {
+                "type": DiscordInteractionType.APPLICATION_COMMAND.value,
+                "application_id": "app-123",
+                "token": "token-abc",
                 "data": {
                     "name": "ask",
                     "options": [{"name": "question", "value": "Hi"}],
@@ -694,3 +704,47 @@ def test_webhook_command_missing_token_returns_400(
     )
     assert response.status_code == 400
     assert "required interaction fields" in response.json()["detail"].lower()
+
+
+def test_webhook_command_blank_option_value_returns_user_error(
+    monkeypatch: Any,
+) -> None:
+    """Whitespace-only command values should reuse the existing user-facing error."""
+    spawn_calls: list[dict[str, str]] = []
+
+    def fake_spawn(**kwargs: str) -> None:
+        spawn_calls.append(kwargs)
+
+    fake_worker = SimpleNamespace(
+        process_and_reply=SimpleNamespace(spawn=fake_spawn),
+    )
+
+    web_app_globals = web_app_factory.__globals__
+    monkeypatch.setitem(
+        web_app_globals,
+        "authenticate",
+        lambda _headers, _body: None,
+    )
+    monkeypatch.setitem(web_app_globals, "modal_worker", fake_worker)
+
+    client = TestClient(web_app_factory())
+    response = client.post(
+        "/interactions",
+        json={
+            "type": DiscordInteractionType.APPLICATION_COMMAND.value,
+            "application_id": "app-123",
+            "token": "token-abc",
+            "data": {
+                "name": "ask",
+                "options": [{"name": "question", "value": "   \n\t  "}],
+            },
+            "member": {"user": {"username": "alice"}},
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "type": DiscordResponseType.CHANNEL_MESSAGE_WITH_SOURCE.value,
+        "data": {"content": "Please provide input for this command."},
+    }
+    assert spawn_calls == []
