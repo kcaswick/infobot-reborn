@@ -1,0 +1,25 @@
+# .copilotignore - Override .gitignore for AI coding assistants
+# 
+# This file allows AI tools (GitHub Copilot, Claude Code, etc.) to access
+# files that are gitignored but useful for context during development.
+#
+# Negation patterns (!) tell AI tools to INCLUDE these paths even though
+# they're in .gitignore. Standard ignore patterns tell AI to EXCLUDE them.
+
+# Allow AI to see temporary work and runtime data for debugging/context
+!temp/
+!data/
+
+# But still hide these from AI (too noisy/large)
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg-info/
+.venv/
+venv/
+.env
+node_modules/
+.git/
